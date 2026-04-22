@@ -1,0 +1,31 @@
+# Dependencies and build artifacts
+**/node_modules/
+**/dist/
+**/build/
+
+# Environment and secrets
+**/.env
+**/.env.*
+connection.php.ini
+connection2.php.ini
+themes/connection.php.ini
+themes/connection2.php.ini
+
+# SFTP profiles with credentials
+.vscode/sftp*.json
+joula-react/.vscode/sftp*.json
+
+# Logs and runtime files
+*.log
+error_log
+
+# Hosting/system artifacts
+.ftpquota
+.b6d2791b3e922c7221f06167329124b7/
+
+# themes images - large icon set, not source code
+themes/images/
+
+# OS junk
+.DS_Store
+Thumbs.db
