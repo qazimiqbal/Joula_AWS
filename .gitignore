@@ -1,31 +1,39 @@
-# Dependencies and build artifacts
-**/node_modules/
-**/dist/
-**/build/
+# Keep repository focused on the active project only.
+# Default: ignore everything at repo root, then allowlist what should be tracked.
+/*
 
-# Environment and secrets
+# Keep these root files
+!.gitignore
+!README.md
+!PROJECT_OVERVIEW.md
+!MODERNIZATION_GUIDE.md
+
+# Keep active frontend project
+!joula-react/
+!joula-react/**
+
+# Keep active PHP API folder
+!api/
+!api/**
+
+# Ignore secrets and local tooling files
+.vscode/
+**/.vscode/
+**/sftp*.json
 **/.env
 **/.env.*
 connection.php.ini
 connection2.php.ini
-themes/connection.php.ini
-themes/connection2.php.ini
 
-# SFTP profiles with credentials
-.vscode/sftp*.json
-joula-react/.vscode/sftp*.json
-
-# Logs and runtime files
+# Build/runtime artifacts
+**/node_modules/
+**/dist/
+**/build/
 *.log
 error_log
 
-# Hosting/system artifacts
-.ftpquota
-.b6d2791b3e922c7221f06167329124b7/
-
-# themes images - large icon set, not source code
-themes/images/
-
-# OS junk
+# OS and hosting noise
 .DS_Store
 Thumbs.db
+.ftpquota
+.b6d2791b3e922c7221f06167329124b7/
