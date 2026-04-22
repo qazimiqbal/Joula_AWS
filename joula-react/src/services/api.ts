@@ -1,5 +1,5 @@
 import axios, { AxiosInstance, AxiosError } from 'axios'
-import { ApiResponse, User, Masjid, LoginRequest, AuthResponse, PrayerTime } from '@/types'
+import { ApiResponse, User, Masjid, AddressRecord, LoginRequest, AuthResponse, PrayerTime } from '@/types'
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || '/mobile'
 
@@ -12,6 +12,19 @@ interface LegacyMasjid {
   St_Name: string
   State: string
   Zip: string
+  Locality?: string
+}
+
+interface LegacyAddress {
+  ID: string
+  Name: string
+  City: string
+  Coordinates: string
+  H_No: string
+  St_Name: string
+  State: string
+  Zip: string
+  Locality?: string
 }
 
 const toKm = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
@@ -50,6 +63,38 @@ const mapLegacyMasjid = (item: LegacyMasjid): Masjid | null => {
     address: addressParts.join(' '),
     latitude,
     longitude,
+    city: item.City || '',
+    state: item.State || '',
+    locality: item.Locality || '',
+    createdAt: new Date().toISOString(),
+  }
+}
+
+const mapLegacyAddress = (item: LegacyAddress): AddressRecord | null => {
+  const coordinateParts = (item.Coordinates || '').split(',')
+  if (coordinateParts.length !== 2) {
+    return null
+  }
+
+  const latitude = Number(coordinateParts[0].trim())
+  const longitude = Number(coordinateParts[1].trim())
+  if (Number.isNaN(latitude) || Number.isNaN(longitude)) {
+    return null
+  }
+
+  const addressParts = [item.H_No, item.St_Name, item.City, item.State, item.Zip]
+    .map((part) => (part || '').trim())
+    .filter(Boolean)
+
+  return {
+    id: Number(item.ID),
+    name: item.Name,
+    address: addressParts.join(' '),
+    latitude,
+    longitude,
+    city: item.City || '',
+    state: (item.State || '').trim(),
+    locality: (item.Locality || '').trim(),
     createdAt: new Date().toISOString(),
   }
 }
@@ -183,6 +228,54 @@ class ApiService {
     lon2: number
   ): Promise<number> {
     return toKm(lat1, lon1, lat2, lon2)
+  }
+
+  // Localities for area selection
+  async getLocalities(state: string): Promise<string[]> {
+    const response = await this.api.get<{ success: boolean; data: string[] }>('/api/localities.php', {
+      params: { state },
+    })
+    return response.data.data || []
+  }
+
+  async getAddresses(params?: {
+    state?: string
+    locality?: string
+    search?: string
+    limit?: number
+  }): Promise<AddressRecord[]> {
+    const response = await this.api.get<{ success: boolean; data: LegacyAddress[] }>('/api/addresses.php', {
+      params: {
+        state: params?.state,
+        locality: params?.locality,
+        search: params?.search,
+      },
+    })
+
+    const mapped = (response.data.data || [])
+      .map((item) => mapLegacyAddress(item))
+      .filter((item): item is AddressRecord => item !== null)
+
+    if (params?.limit && params.limit > 0) {
+      return mapped.slice(0, params.limit)
+    }
+
+    return mapped
+  }
+
+  async searchAddressesByLocation(
+    latitude: number,
+    longitude: number,
+    radiusKm: number = 10
+  ): Promise<AddressRecord[]> {
+    const addresses = await this.getAddresses()
+    return addresses
+      .map((address) => ({
+        ...address,
+        distance: toKm(latitude, longitude, address.latitude, address.longitude),
+      }))
+      .filter((address) => (address.distance || 0) <= radiusKm)
+      .sort((a, b) => (a.distance || 0) - (b.distance || 0))
   }
 
   // Prayer times

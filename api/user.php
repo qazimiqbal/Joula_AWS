@@ -52,6 +52,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
             'email' => $row['email'],
             'phone' => $row['phone'] ? $row['phone'] : '',
             'role' => $role,
+            'permissionLevel' => $permissions,
             'createdAt' => date('c')
         )
     ));
@@ -106,6 +107,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' || $_SERVER['REQUEST_METHOD'] === 'PUT
             'email' => $email,
             'phone' => $phone,
             'role' => $role,
+            'permissionLevel' => $permissions,
             'createdAt' => date('c')
         ),
         'message' => 'Profile updated successfully'

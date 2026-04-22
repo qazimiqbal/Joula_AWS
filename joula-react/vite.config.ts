@@ -8,10 +8,12 @@ export default defineConfig({
   server: {
     port: 3000,
     proxy: {
-      '/api': {
-        target: 'http://localhost:5000',
+      // Forward all /mobile/* requests to the live GoDaddy server
+      // This avoids CORS issues when developing locally
+      '/mobile': {
+        target: 'https://myjoula.com',
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, '')
+        secure: true,
       }
     }
   },

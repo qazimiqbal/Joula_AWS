@@ -3,7 +3,7 @@ import path from 'node:path'
 
 const distDir = path.resolve('dist')
 const indexPath = path.join(distDir, 'index.html')
-const routes = ['login', 'dashboard', 'map', 'profile']
+const routes = ['login', 'dashboard', 'map', 'area-selection', 'profile']
 
 async function ensureRouteFallbacks() {
   const indexHtml = await fs.readFile(indexPath, 'utf8')

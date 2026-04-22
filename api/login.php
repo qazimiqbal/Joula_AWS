@@ -78,6 +78,7 @@ $user = array(
     'email' => $userRow['email'] ? $userRow['email'] : $identifier,
     'phone' => $userRow['phone'] ? $userRow['phone'] : '',
     'role' => $role,
+    'permissionLevel' => $permissions,
     'createdAt' => date('c')
 );
 

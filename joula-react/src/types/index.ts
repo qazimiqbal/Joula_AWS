@@ -5,6 +5,7 @@ export interface User {
   email: string
   phone?: string
   role: 'user' | 'admin'
+  permissionLevel?: number
   createdAt: string
 }
 
@@ -15,10 +16,26 @@ export interface Masjid {
   address: string
   latitude: number
   longitude: number
+  city?: string
   phone?: string
   website?: string
   members?: number
   prayerTimes?: PrayerTime[]
+  distance?: number
+  state?: string
+  locality?: string
+  createdAt: string
+}
+
+export interface AddressRecord {
+  id: number
+  name: string
+  address: string
+  latitude: number
+  longitude: number
+  city?: string
+  state?: string
+  locality?: string
   distance?: number
   createdAt: string
 }
