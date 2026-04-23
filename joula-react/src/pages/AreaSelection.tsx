@@ -11,10 +11,8 @@ import {
   FormControl,
   InputLabel,
   CircularProgress,
-  Divider,
   Alert,
 } from '@mui/material'
-import { useAuth } from '@/context/AuthContext'
 import apiService from '@services/api'
 
 const STATES = [
@@ -28,17 +26,12 @@ const RADIUS_OPTIONS = [1, 2, 3, 4, 5, 7, 10, 15, 25]
 
 const AreaSelection: React.FC = () => {
   const navigate = useNavigate()
-  const { user } = useAuth()
-
-  const permissionLevel = user?.permissionLevel ?? (user?.role === 'admin' ? 3 : 0)
-  const canAccessStaffActions = permissionLevel > 0
 
   const [selectedState, setSelectedState] = useState<string | null>(null)
   const [localities, setLocalities] = useState<string[]>([])
   const [selectedLocality, setSelectedLocality] = useState('All')
   const [localitiesLoading, setLocalitiesLoading] = useState(false)
   const [selectedRadius, setSelectedRadius] = useState(5)
-  const [sathiState, setSathiState] = useState('All')
   const [locationError, setLocationError] = useState('')
 
   // Load localities directly from the MySQL-backed PHP endpoint.
@@ -83,15 +76,10 @@ const AreaSelection: React.FC = () => {
     )
   }
 
-  const handleSathiSearch = () => {
-    const mobileBase = (import.meta.env.VITE_API_URL || '/mobile').replace(/\/$/, '')
-    window.location.href = `${mobileBase}/mapsathi.php?state=${sathiState}`
-  }
-
   return (
     <Box>
       <Typography variant="h5" gutterBottom>
-        Select Map Area
+        VIEW DATA
       </Typography>
 
       <Paper elevation={1} sx={{ p: 3, mb: 3 }}>
@@ -124,9 +112,7 @@ const AreaSelection: React.FC = () => {
                   label="Select Locality"
                   onChange={(e) => setSelectedLocality(e.target.value)}
                 >
-                  {canAccessStaffActions && (
-                    <MenuItem value="All">All Localities</MenuItem>
-                  )}
+                  <MenuItem value="All">All Localities</MenuItem>
                   {localities.map((loc) => (
                     <MenuItem key={loc} value={loc}>
                       {loc}
@@ -141,9 +127,6 @@ const AreaSelection: React.FC = () => {
           </Box>
         )}
       </Paper>
-
-      <Divider sx={{ my: 3 }} />
-
       <Paper elevation={1} sx={{ p: 3, mb: 3 }}>
         <Typography variant="h6" gutterBottom>
           Find Masjids Within a Radius Around You
@@ -173,36 +156,6 @@ const AreaSelection: React.FC = () => {
           </Button>
         </Box>
       </Paper>
-
-      {canAccessStaffActions && (
-        <>
-          <Divider sx={{ my: 3 }} />
-          <Paper elevation={1} sx={{ p: 3, mb: 3 }}>
-            <Typography variant="h6" gutterBottom>
-              Show People Who Spend Time (Sathi)
-            </Typography>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
-              <FormControl size="small" sx={{ minWidth: 160 }}>
-                <InputLabel>State</InputLabel>
-                <Select
-                  value={sathiState}
-                  label="State"
-                  onChange={(e) => setSathiState(e.target.value)}
-                >
-                  <MenuItem value="All">All</MenuItem>
-                  <MenuItem value="GA">Georgia</MenuItem>
-                  <MenuItem value="AL">Alabama</MenuItem>
-                  <MenuItem value="SC">South Carolina</MenuItem>
-                  <MenuItem value="TN">Tennessee</MenuItem>
-                </Select>
-              </FormControl>
-              <Button variant="outlined" onClick={handleSathiSearch}>
-                Search
-              </Button>
-            </Box>
-          </Paper>
-        </>
-      )}
 
       <Button variant="text" onClick={() => navigate('/dashboard')}>
         Back to Dashboard

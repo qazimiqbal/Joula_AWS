@@ -12,6 +12,14 @@ function respond($statusCode, $payload) {
     exit;
 }
 
+function permission_to_level($permissionRaw) {
+    $value = trim((string)$permissionRaw);
+    if ($value === '3' || strcasecmp($value, 'Super Administrator') === 0) return 3;
+    if ($value === '2' || strcasecmp($value, 'Administrator') === 0) return 2;
+    if ($value === '1' || strcasecmp($value, 'Editor') === 0) return 1;
+    return 0;
+}
+
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     respond(405, array('success' => false, 'message' => 'Method not allowed'));
 }
@@ -35,10 +43,10 @@ if ($atPos !== false) {
     $usernameCandidate = substr($identifier, 0, $atPos);
 }
 
-include('../connection.php.ini');
+include('db.php');
 mysqli_select_db($con, $db);
 
-$sql = "SELECT id, username, email, phone, Permissions FROM Login_user WHERE status = 'true' AND (username = ? OR username = ? OR email = ?) AND password = MD5(?) LIMIT 1";
+$sql = "SELECT id, username, email, phone, Permissions FROM Login_user_AWS WHERE status = 'true' AND (username = ? OR username = ? OR email = ?) AND password = MD5(?) LIMIT 1";
 $stmt = mysqli_prepare($con, $sql);
 if (!$stmt) {
     respond(500, array('success' => false, 'message' => 'Failed to prepare login query'));
@@ -63,7 +71,7 @@ if (!$userRow) {
     respond(401, array('success' => false, 'message' => 'Invalid credentials'));
 }
 
-$permissions = isset($userRow['Permissions']) ? intval($userRow['Permissions']) : 0;
+$permissions = permission_to_level(isset($userRow['Permissions']) ? $userRow['Permissions'] : '');
 $role = $permissions >= 3 ? 'admin' : 'user';
 
 if (function_exists('random_bytes')) {

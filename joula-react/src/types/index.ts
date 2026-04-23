@@ -42,6 +42,7 @@ export interface AddressRecord {
   aptNo?: string
   distance?: number
   lastVisit?: string
+  comments?: string
   createdAt: string
 }
 
@@ -78,4 +79,49 @@ export interface LoginRequest {
 export interface AuthResponse {
   token: string
   user: User
+}
+
+export interface RegisterRequest {
+  username: string
+  password: string
+  email: string
+  phone: string
+}
+
+export interface PendingUser {
+  id: number
+  username: string
+  email: string
+  phone: string
+  createdAt: string
+}
+
+export interface MissingCoordinatesRecord {
+  id: number
+  name: string
+  houseNo: string
+  aptNo?: string
+  streetName: string
+  city: string
+  state: string
+  zip: string
+  locality?: string
+}
+
+export interface CreateAddressRequest {
+  name: string
+  halaqa: string
+  houseNo: string
+  aptNo?: string
+  streetName: string
+  city: string
+  state: string
+  zip: string
+  locality: string
+  verified: 'Y' | 'N'
+  masjid?: string
+  lastVisit?: string
+  comments?: string
+  latitude?: number
+  longitude?: number
 }

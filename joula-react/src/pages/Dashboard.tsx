@@ -17,15 +17,6 @@ const Dashboard: React.FC = () => {
   const canAccessStaffActions = permissionLevel > 0
   const canAccessAdminActions = permissionLevel >= 3
 
-  const mobileBaseUrl = (import.meta.env.VITE_API_URL || '/mobile').replace(/\/$/, '')
-  const siteBaseUrl = mobileBaseUrl.endsWith('/mobile')
-    ? mobileBaseUrl.slice(0, -7)
-    : window.location.origin
-
-  const openExternal = (path: string) => {
-    window.location.href = `${mobileBaseUrl}/${path}`
-  }
-
   const handleLogout = () => {
     logout()
     navigate('/login')
@@ -68,92 +59,29 @@ const Dashboard: React.FC = () => {
         <Grid container spacing={2}>
           <Grid item xs={12} sm={6} md={4}>
             <Button fullWidth variant="contained" onClick={() => navigate('/area-selection')}>
-              View Map
+              View Data
             </Button>
           </Grid>
 
           {canAccessStaffActions && (
             <>
               <Grid item xs={12} sm={6} md={4}>
-                <Button fullWidth variant="outlined" onClick={() => openExternal('newList.php')}>
-                  View List
-                </Button>
-              </Grid>
-              <Grid item xs={12} sm={6} md={4}>
-                <Button fullWidth variant="outlined" onClick={() => openExternal('Print_List.php')}>
-                  Print List
-                </Button>
-              </Grid>
-            </>
-          )}
-
-          <Grid item xs={12} sm={6} md={4}>
-            <Button fullWidth variant="outlined" onClick={() => openExternal('nearestMasjid.php')}>
-              Find Nearest Masjid
-            </Button>
-          </Grid>
-
-          {canAccessStaffActions && (
-            <>
-              <Grid item xs={12} sm={6} md={4}>
-                <Button fullWidth variant="outlined" onClick={() => openExternal('edit.php')}>
-                  Add New Address
-                </Button>
-              </Grid>
-              <Grid item xs={12} sm={6} md={4}>
-                <Button fullWidth variant="outlined" onClick={() => openExternal('add_currentAddress.php')}>
-                  Add Current Address
-                </Button>
-              </Grid>
-            </>
-          )}
-
-          {canAccessAdminActions && (
-            <>
-              <Grid item xs={12} sm={6} md={4}>
-                <Button fullWidth variant="outlined" onClick={() => openExternal('add_masjid.php')}>
-                  Add New Masjid
-                </Button>
-              </Grid>
-              <Grid item xs={12} sm={6} md={4}>
-                <Button fullWidth variant="outlined" onClick={() => openExternal('add_user.php')}>
-                  Add New User
-                </Button>
-              </Grid>
-              <Grid item xs={12} sm={6} md={4}>
-                <Button fullWidth variant="outlined" onClick={() => openExternal('delete_nonmuslims.php')}>
-                  Delete Non-Muslim
-                </Button>
-              </Grid>
-              <Grid item xs={12} sm={6} md={4}>
-                <Button fullWidth variant="outlined" onClick={() => openExternal('verify_Masjid.php')}>
-                  Verify New Masjid
-                </Button>
-              </Grid>
-              <Grid item xs={12} sm={6} md={4}>
-                <Button fullWidth variant="outlined" onClick={() => openExternal('list_users.php')}>
-                  Edit Users
-                </Button>
-              </Grid>
-            </>
-          )}
-
-          {canAccessStaffActions && (
-            <>
-              <Grid item xs={12} sm={6} md={4}>
-                <Button fullWidth variant="outlined" onClick={() => openExternal('list.php')}>
-                  Search
+                <Button
+                  fullWidth
+                  variant="outlined"
+                  onClick={() => navigate('/addresses/new')}
+                >
+                  Add New Address (AWS)
                 </Button>
               </Grid>
               <Grid item xs={12} sm={6} md={4}>
                 <Button
                   fullWidth
                   variant="outlined"
-                  onClick={() => {
-                    window.location.href = `${siteBaseUrl}/halaqa`
-                  }}
+                  color="secondary"
+                  onClick={() => navigate('/missing-coordinates')}
                 >
-                  Halaqa Dashboard
+                  Fix Missing Coordinates
                 </Button>
               </Grid>
             </>
@@ -163,11 +91,24 @@ const Dashboard: React.FC = () => {
             <Button
               fullWidth
               variant="outlined"
-              onClick={() => openExternal(`add_user.php?id=${user?.id || ''}`)}
+              onClick={() => navigate('/account')}
             >
-              Change Password
+              Account Settings
             </Button>
           </Grid>
+
+          {canAccessAdminActions && (
+            <Grid item xs={12} sm={6} md={4}>
+              <Button
+                fullWidth
+                variant="outlined"
+                color="warning"
+                onClick={() => navigate('/pending-users')}
+              >
+                Approve New Users
+              </Button>
+            </Grid>
+          )}
         </Grid>
       </Paper>
     </Box>

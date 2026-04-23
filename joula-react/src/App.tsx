@@ -12,6 +12,11 @@ import Dashboard from './pages/Dashboard'
 import MapView from './pages/MapView'
 import AreaSelection from './pages/AreaSelection'
 import UserProfile from './pages/UserProfile'
+import EnterComments from './pages/EnterComments'
+import AccountSettings from './pages/AccountSettings'
+import PendingUsers from './pages/PendingUsers'
+import AddAddress from './pages/AddAddress'
+import MissingCoordinates from './pages/MissingCoordinates'
 import PrivateRoute from './components/PrivateRoute'
 import './App.css'
 
@@ -100,6 +105,46 @@ function App() {
                 element={
                   <PrivateRoute>
                     <UserProfile />
+                  </PrivateRoute>
+                }
+              />
+              <Route
+                path="/account"
+                element={
+                  <PrivateRoute>
+                    <AccountSettings />
+                  </PrivateRoute>
+                }
+              />
+              <Route
+                path="/comments"
+                element={
+                  <PrivateRoute>
+                    <EnterComments />
+                  </PrivateRoute>
+                }
+              />
+              <Route
+                path="/pending-users"
+                element={
+                  <PrivateRoute>
+                    <PendingUsers />
+                  </PrivateRoute>
+                }
+              />
+              <Route
+                path="/addresses/new"
+                element={
+                  <PrivateRoute>
+                    <AddAddress />
+                  </PrivateRoute>
+                }
+              />
+              <Route
+                path="/missing-coordinates"
+                element={
+                  <PrivateRoute>
+                    <MissingCoordinates />
                   </PrivateRoute>
                 }
               />

@@ -13,11 +13,11 @@ if ($state === '') {
     exit;
 }
 
-include('../connection.php.ini');
+include('db.php');
 mysqli_select_db($con, $db);
 
 $stmt = mysqli_prepare($con,
-    "SELECT DISTINCT Locality FROM Addresses2 WHERE State = ? AND Coordinates != '' ORDER BY Locality"
+    "SELECT DISTINCT Locality FROM Addresses_AWS WHERE State = ? AND Coordinates != '' ORDER BY Locality"
 );
 if (!$stmt) {
     http_response_code(500);

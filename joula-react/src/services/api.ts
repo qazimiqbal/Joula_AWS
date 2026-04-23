@@ -1,19 +1,7 @@
 import axios, { AxiosInstance, AxiosError } from 'axios'
-import { ApiResponse, User, Masjid, AddressRecord, LoginRequest, AuthResponse, PrayerTime } from '@/types'
+import { ApiResponse, User, Masjid, AddressRecord, LoginRequest, AuthResponse, PrayerTime, RegisterRequest, PendingUser, CreateAddressRequest, MissingCoordinatesRecord } from '@/types'
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || '/mobile'
-
-interface LegacyMasjid {
-  ID: string
-  Name: string
-  City: string
-  Coordinates: string
-  H_No: string
-  St_Name: string
-  State: string
-  Zip: string
-  Locality?: string
-}
 
 interface LegacyAddress {
   ID: string
@@ -27,6 +15,7 @@ interface LegacyAddress {
   Locality?: string
   Last_Visit?: string
   Apt_No?: string
+  Comments?: string
 }
 
 const toKm = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
@@ -41,35 +30,6 @@ const toKm = (lat1: number, lon1: number, lat2: number, lon2: number): number =>
       Math.sin(dLon / 2)
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
   return earthRadiusKm * c
-}
-
-const mapLegacyMasjid = (item: LegacyMasjid): Masjid | null => {
-  const coordinateParts = (item.Coordinates || '').split(',')
-  if (coordinateParts.length !== 2) {
-    return null
-  }
-
-  const latitude = Number(coordinateParts[0].trim())
-  const longitude = Number(coordinateParts[1].trim())
-  if (Number.isNaN(latitude) || Number.isNaN(longitude)) {
-    return null
-  }
-
-  const addressParts = [item.H_No, item.St_Name, item.City, item.State, item.Zip]
-    .map((part) => (part || '').trim())
-    .filter(Boolean)
-
-  return {
-    id: Number(item.ID),
-    name: item.Name,
-    address: addressParts.join(' '),
-    latitude,
-    longitude,
-    city: item.City || '',
-    state: item.State || '',
-    locality: item.Locality || '',
-    createdAt: new Date().toISOString(),
-  }
 }
 
 const mapLegacyAddress = (item: LegacyAddress): AddressRecord | null => {
@@ -102,6 +62,7 @@ const mapLegacyAddress = (item: LegacyAddress): AddressRecord | null => {
     zip: (item.Zip || '').trim(),
     aptNo: (item.Apt_No || '').trim(),
     lastVisit: item.Last_Visit || '',
+    comments: (item.Comments || '').trim(),
     createdAt: new Date().toISOString(),
   }
 }
@@ -158,8 +119,11 @@ class ApiService {
     return
   }
 
-  async register(_userData: Partial<User>): Promise<User> {
-    throw new Error('Registration is not available in PHP adapter mode')
+  async register(userData: RegisterRequest): Promise<void> {
+    const response = await this.api.post<{ success: boolean; message?: string }>('/api/register.php', userData)
+    if (!response.data.success) {
+      throw new Error(response.data.message || 'Registration failed')
+    }
   }
 
   // User endpoints
@@ -171,7 +135,7 @@ class ApiService {
     throw new Error(response.data.message || 'Failed to fetch user')
   }
 
-  async updateUser(id: number, userData: Partial<User>): Promise<User> {
+  async updateUser(id: number, userData: Partial<User> & { password?: string }): Promise<User> {
     const response = await this.api.post<ApiResponse<User>>('/api/user.php', {
       id,
       ...userData,
@@ -182,12 +146,30 @@ class ApiService {
     throw new Error(response.data.message || 'Failed to update user')
   }
 
+  async getPendingUsers(requesterId: number): Promise<PendingUser[]> {
+    const response = await this.api.get<{ success: boolean; data: PendingUser[]; message?: string }>('/api/pending_users.php', {
+      params: { requesterId },
+    })
+    if (response.data.data) {
+      return response.data.data
+    }
+    throw new Error(response.data.message || 'Failed to fetch pending users')
+  }
+
+  async reviewPendingUser(requesterId: number, userId: number, action: 'approve' | 'disapprove'): Promise<void> {
+    const response = await this.api.post<{ success: boolean; message?: string }>('/api/pending_users.php', {
+      requesterId,
+      userId,
+      action,
+    })
+    if (!response.data.success) {
+      throw new Error(response.data.message || 'Failed to update user status')
+    }
+  }
+
   // Masjid endpoints
   async getMasjids(params?: { search?: string; limit?: number; page?: number }): Promise<Masjid[]> {
-    const response = await this.api.get<LegacyMasjid[]>('/getmasjiddata.php')
-    const mapped = response.data
-      .map((item) => mapLegacyMasjid(item))
-      .filter((item): item is Masjid => item !== null)
+    const mapped: Masjid[] = []
 
     const search = params?.search?.trim().toLowerCase()
     const filtered = search
@@ -239,51 +221,10 @@ class ApiService {
 
   // Localities for area selection
   async getLocalities(state: string): Promise<string[]> {
-    try {
-      const response = await this.api.get<{ success: boolean; data: string[] }>('/api/localities.php', {
-        params: { state },
-      })
-      return response.data.data || []
-    } catch {
-      // Fallback for environments where /api/localities.php is not deployed yet.
-      const all = await this.getLegacyAddresses()
-      const targetState = state.trim().toLowerCase()
-      const inState = all.filter((item) => (item.state || '').trim().toLowerCase() === targetState)
-
-      const localityValues = Array.from(
-        new Set(
-          inState
-            .map((item) => (item.locality || '').trim())
-            .filter(Boolean)
-        )
-      )
-
-      // When legacy payload omits Locality field, fall back to City values.
-      if (localityValues.length === 0) {
-        return Array.from(
-          new Set(
-            inState
-              .map((item) => (item.city || '').trim())
-              .filter(Boolean)
-          )
-        ).sort()
-      }
-
-      return localityValues.sort()
-    }
-  }
-
-  private async getLegacyAddresses(locality: string = 'All', area: string = 'All'): Promise<AddressRecord[]> {
-    const response = await this.api.get<LegacyAddress[]>('/getaddressdata.php', {
-      params: {
-        locality,
-        area,
-      },
+    const response = await this.api.get<{ success: boolean; data: string[] }>('/api/localities.php', {
+      params: { state },
     })
-
-    return (response.data || [])
-      .map((item) => mapLegacyAddress(item))
-      .filter((item): item is AddressRecord => item !== null)
+    return response.data.data || []
   }
 
   async getAddresses(params?: {
@@ -292,43 +233,17 @@ class ApiService {
     search?: string
     limit?: number
   }): Promise<AddressRecord[]> {
-    let mapped: AddressRecord[] = []
+    const response = await this.api.get<{ success: boolean; data: LegacyAddress[] }>('/api/addresses.php', {
+      params: {
+        state: params?.state,
+        locality: params?.locality,
+        search: params?.search,
+      },
+    })
 
-    try {
-      const response = await this.api.get<{ success: boolean; data: LegacyAddress[] }>('/api/addresses.php', {
-        params: {
-          state: params?.state,
-          locality: params?.locality,
-          search: params?.search,
-        },
-      })
-
-      mapped = (response.data.data || [])
-        .map((item) => mapLegacyAddress(item))
-        .filter((item): item is AddressRecord => item !== null)
-    } catch {
-      // Fallback for environments where /api/addresses.php is not deployed yet.
-      if (params?.locality && params.locality !== 'All') {
-        mapped = await this.getLegacyAddresses(params.locality, 'All')
-      } else {
-        mapped = await this.getLegacyAddresses()
-      }
-
-      if (params?.state) {
-        const targetState = params.state.trim().toLowerCase()
-        mapped = mapped.filter((item) => (item.state || '').trim().toLowerCase() === targetState)
-      }
-
-      if (params?.search) {
-        const search = params.search.trim().toLowerCase()
-        mapped = mapped.filter(
-          (item) =>
-            item.name.toLowerCase().includes(search) ||
-            item.address.toLowerCase().includes(search) ||
-            (item.city || '').toLowerCase().includes(search)
-        )
-      }
-    }
+    const mapped = (response.data.data || [])
+      .map((item) => mapLegacyAddress(item))
+      .filter((item): item is AddressRecord => item !== null)
 
     if (params?.limit && params.limit > 0) {
       return mapped.slice(0, params.limit)
@@ -350,6 +265,40 @@ class ApiService {
       }))
       .filter((address) => (address.distance || 0) <= radiusKm)
       .sort((a, b) => (a.distance || 0) - (b.distance || 0))
+  }
+
+  // Visit / Comments
+  async getVisitData(id: number): Promise<{ comments: string; ethinicity: string; potential: string }> {
+    const response = await this.api.get<{ success: boolean; data: { comments: string; ethinicity: string; potential: string } }>('/api/visit.php', { params: { id } })
+    if (response.data.data) return response.data.data
+    throw new Error('Failed to load visit data')
+  }
+
+  async updateVisit(
+    id: number,
+    data: { today: string; actionTaken: string; comments: string; ethinicity: string; potential: string }
+  ): Promise<void> {
+    const response = await this.api.post<{ success: boolean; message?: string }>('/api/visit.php', { id, ...data })
+    if (!response.data.success) throw new Error(response.data.message || 'Update failed')
+  }
+
+  async createAddress(data: CreateAddressRequest): Promise<void> {
+    const response = await this.api.post<{ success: boolean; message?: string }>('/api/address_create.php', data)
+    if (!response.data.success) {
+      throw new Error(response.data.message || 'Failed to create address')
+    }
+  }
+
+  async getMissingCoordinates(): Promise<MissingCoordinatesRecord[]> {
+    const response = await this.api.get<{ success: boolean; data: MissingCoordinatesRecord[] }>('/api/missing_coordinates.php')
+    return response.data.data || []
+  }
+
+  async saveCoordinates(id: number, latitude: number, longitude: number): Promise<void> {
+    const response = await this.api.post<{ success: boolean; message?: string }>('/api/missing_coordinates.php', { id, latitude, longitude })
+    if (!response.data.success) {
+      throw new Error(response.data.message || 'Failed to save coordinates')
+    }
   }
 
   // Prayer times

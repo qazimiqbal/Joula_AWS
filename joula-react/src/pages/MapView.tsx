@@ -5,11 +5,19 @@ import {
   Paper,
   CircularProgress,
   Alert,
-  Typography,
+  Table,
+  TableBody,
+  TableCell,
+  TableRow,
 } from '@mui/material'
 import { MapContainer, TileLayer, CircleMarker, Popup, useMap } from 'react-leaflet'
 import apiService from '@services/api'
 import { AddressRecord } from '@/types'
+
+const truncatePopupText = (value?: string, maxLength: number = 80): string => {
+  if (!value) return 'None'
+  return value.length > maxLength ? `${value.slice(0, maxLength - 3)}...` : value
+}
 
 const DEFAULT_CENTER: [number, number] = [33.749, -84.388]
 
@@ -116,39 +124,77 @@ const MapView: React.FC = () => {
 
           {addresses.map((address) => {
             const color = getMarkerColor(address.lastVisit)
+            const fullAddress = [address.aptNo, address.houseNo, address.streetName, address.city, address.state, address.zip]
+              .filter(Boolean)
+              .join(', ')
             return (
             <CircleMarker
               key={address.id}
               center={[address.latitude, address.longitude]}
-              {...{ radius: 5 } as object}
+              {...{ radius: 6 } as object}
               pathOptions={{ color: '#333', weight: 1, fillColor: color, fillOpacity: 1 }}
             >
               <Popup>
-                <Typography variant="subtitle2" sx={{ fontWeight: 'bold', mb: 0.5 }}>{address.name}</Typography>
-                {address.city && (
-                  <Typography variant="body2"><strong>City:</strong> {address.city}</Typography>
-                )}
-                <Typography variant="body2">
-                  <strong>Address:</strong>{' '}
-                  {[address.aptNo, address.houseNo, address.streetName, address.city, address.state, address.zip]
-                    .filter(Boolean).join(', ')}
-                </Typography>
-                {address.lastVisit && (
-                  <Typography variant="body2"><strong>Last Visit:</strong> {address.lastVisit}</Typography>
-                )}
-                {!address.lastVisit && (
-                  <Typography variant="body2"><strong>Last Visit:</strong> Never</Typography>
-                )}
-                <a
-                  href={`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(
-                    [address.aptNo, address.houseNo, address.streetName, address.city, address.state, address.zip].filter(Boolean).join(' ')
-                  )}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{ display: 'inline-block', marginTop: 6, padding: '4px 8px', background: '#1976d2', color: 'white', borderRadius: 4, textDecoration: 'none', fontSize: 12 }}
+                <Table
+                  size="small"
+                  sx={{
+                    minWidth: 150,
+                    borderCollapse: 'collapse',
+                    fontSize: '12px',
+                    '& .MuiTableCell-root': {
+                      border: '1px solid #d3d3d3',
+                      padding: '4px 6px',
+                      verticalAlign: 'top',
+                      fontSize: '12px',
+                      lineHeight: 1.2,
+                    },
+                  }}
                 >
-                  Navigate me here
-                </a>
+                  <TableBody>
+                    <TableRow>
+                      <TableCell sx={{ width: '35%', fontWeight: 600 }}>Name</TableCell>
+                      <TableCell>{address.name}</TableCell>
+                    </TableRow>
+                    {address.city && (
+                      <TableRow>
+                        <TableCell sx={{ fontWeight: 600 }}>City</TableCell>
+                        <TableCell>{address.city}</TableCell>
+                      </TableRow>
+                    )}
+                    <TableRow>
+                      <TableCell sx={{ fontWeight: 600 }}>Address</TableCell>
+                      <TableCell>{fullAddress}</TableCell>
+                    </TableRow>
+                    <TableRow>
+                      <TableCell sx={{ fontWeight: 600 }}>Last Visit</TableCell>
+                      <TableCell>{address.lastVisit || 'Never'}</TableCell>
+                    </TableRow>
+                    <TableRow>
+                      <TableCell sx={{ fontWeight: 600 }}>Comments</TableCell>
+                      <TableCell>{truncatePopupText(address.comments)}</TableCell>
+                    </TableRow>
+                  </TableBody>
+                </Table>
+                <div style={{ display: 'flex', gap: 4, marginTop: 5 }}>
+                  <a
+                    href={`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(
+                      [address.aptNo, address.houseNo, address.streetName, address.city, address.state, address.zip].filter(Boolean).join(' ')
+                    )}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ display: 'inline-block', padding: '3px 7px', background: '#1976d2', color: 'white', borderRadius: 4, textDecoration: 'none', fontSize: 11 }}
+                  >
+                    Navigate me here
+                  </a>
+                  <a
+                    href={`${import.meta.env.BASE_URL}comments?id=${address.id}&comments=${encodeURIComponent(address.comments || '')}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ display: 'inline-block', padding: '3px 7px', background: '#388e3c', color: 'white', borderRadius: 4, textDecoration: 'none', fontSize: 11 }}
+                  >
+                    Enter Comments
+                  </a>
+                </div>
               </Popup>
             </CircleMarker>
             )
