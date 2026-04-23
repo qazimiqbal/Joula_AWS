@@ -1,11 +1,10 @@
-import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom'
+import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate } from 'react-router-dom'
 import {
   AppBar, Box, Toolbar, Typography, Container,
-  BottomNavigation, BottomNavigationAction, Paper, useMediaQuery, useTheme,
+  Paper, Button,
 } from '@mui/material'
-import DashboardIcon from '@mui/icons-material/Dashboard'
-import MapIcon from '@mui/icons-material/Map'
-import AccountCircleIcon from '@mui/icons-material/AccountCircle'
+import HomeIcon from '@mui/icons-material/Home'
+import RefreshIcon from '@mui/icons-material/Refresh'
 import LogoutIcon from '@mui/icons-material/Logout'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import Login from './pages/Login'
@@ -16,37 +15,37 @@ import UserProfile from './pages/UserProfile'
 import PrivateRoute from './components/PrivateRoute'
 import './App.css'
 
-function MobileBottomNav() {
+function AppFooter() {
   const navigate = useNavigate()
-  const location = useLocation()
   const { isAuthenticated, logout } = useAuth()
-  const theme = useTheme()
-  const isMobile = useMediaQuery(theme.breakpoints.down('md'))
 
-  if (!isAuthenticated || !isMobile) return null
-
-  const pathToValue = (path: string) => {
-    if (path.startsWith('/map') || path.startsWith('/area-selection')) return 1
-    if (path.startsWith('/profile')) return 2
-    return 0
-  }
+  if (!isAuthenticated) return null
 
   return (
-    <Paper sx={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 1200 }} elevation={3}>
-      <BottomNavigation
-        value={pathToValue(location.pathname)}
-        onChange={(_e, newValue) => {
-          if (newValue === 0) navigate('/dashboard')
-          if (newValue === 1) navigate('/area-selection')
-          if (newValue === 2) navigate('/profile')
-          if (newValue === 3) { logout(); navigate('/login') }
-        }}
-      >
-        <BottomNavigationAction label="Home" icon={<DashboardIcon />} />
-        <BottomNavigationAction label="Map" icon={<MapIcon />} />
-        <BottomNavigationAction label="Profile" icon={<AccountCircleIcon />} />
-        <BottomNavigationAction label="Logout" icon={<LogoutIcon />} />
-      </BottomNavigation>
+    <Paper
+      component="footer"
+      elevation={3}
+      square
+      sx={{
+        position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 1200,
+        bgcolor: 'black', display: 'flex', justifyContent: 'center', gap: 1, py: 0.5,
+      }}
+    >
+      <Button
+        startIcon={<HomeIcon />}
+        onClick={() => navigate('/dashboard')}
+        sx={{ color: 'white', textTransform: 'none' }}
+      >Home</Button>
+      <Button
+        startIcon={<RefreshIcon />}
+        onClick={() => window.location.reload()}
+        sx={{ color: 'white', textTransform: 'none' }}
+      >Refresh</Button>
+      <Button
+        startIcon={<LogoutIcon />}
+        onClick={() => { logout(); navigate('/login') }}
+        sx={{ color: 'white', textTransform: 'none' }}
+      >Logout</Button>
     </Paper>
   )
 }
@@ -56,22 +55,18 @@ function App() {
     <AuthProvider>
       <Router basename={import.meta.env.BASE_URL}>
         <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
-          <AppBar position="static">
+          <AppBar position="static" sx={{ bgcolor: 'black' }}>
             <Toolbar>
-              <Typography
-                variant="h6"
-                component="div"
-                sx={{ flexGrow: 1, fontSize: { xs: '1rem', sm: '1.25rem' } }}
-              >
-                🕌 <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>Joula - Masjid Finder</Box>
-                <Box component="span" sx={{ display: { xs: 'inline', sm: 'none' } }}>Joula</Box>
+              <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
+                Joula Dashboard
               </Typography>
             </Toolbar>
           </AppBar>
 
           <Container
-            maxWidth="lg"
-            sx={{ flexGrow: 1, py: { xs: 2, md: 4 }, px: { xs: 1, sm: 2, md: 3 }, pb: { xs: 10, md: 4 } }}
+            maxWidth={false}
+            disableGutters
+            sx={{ flexGrow: 1, overflow: 'hidden' }}
           >
             <Routes>
               <Route path="/login" element={<Login />} />
@@ -111,7 +106,7 @@ function App() {
             </Routes>
           </Container>
 
-          <MobileBottomNav />
+          <AppFooter />
         </Box>
       </Router>
     </AuthProvider>

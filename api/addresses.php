@@ -13,7 +13,7 @@ $state = isset($_GET['state']) ? trim($_GET['state']) : '';
 $locality = isset($_GET['locality']) ? trim($_GET['locality']) : '';
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 
-$sql = "SELECT ID, Name, City, Coordinates, H_No, St_Name, State, Zip, Locality
+$sql = "SELECT ID, Name, City, Coordinates, H_No, St_Name, State, Zip, Locality, Last_Visit, Apt_No
         FROM Addresses2
         WHERE Coordinates != '' AND Coordinates != ','";
 $params = array();
@@ -26,7 +26,7 @@ if ($state !== '') {
 }
 
 if ($locality !== '' && strcasecmp($locality, 'All') !== 0) {
-    $sql .= " AND TRIM(COALESCE(NULLIF(Locality, ''), City)) = ?";
+    $sql .= " AND TRIM(Locality) = ?";
     $types .= 's';
     $params[] = $locality;
 }
@@ -61,7 +61,7 @@ if (!empty($params)) {
 }
 
 mysqli_stmt_execute($stmt);
-mysqli_stmt_bind_result($stmt, $id, $name, $city, $coordinates, $houseNo, $streetName, $recordState, $zip, $recordLocality);
+mysqli_stmt_bind_result($stmt, $id, $name, $city, $coordinates, $houseNo, $streetName, $recordState, $zip, $recordLocality, $lastVisit, $aptNo);
 
 $rows = array();
 while (mysqli_stmt_fetch($stmt)) {
@@ -74,7 +74,9 @@ while (mysqli_stmt_fetch($stmt)) {
         'St_Name' => $streetName,
         'State' => $recordState,
         'Zip' => $zip,
-        'Locality' => $recordLocality
+        'Locality' => $recordLocality,
+        'Last_Visit' => $lastVisit,
+        'Apt_No' => $aptNo
     );
 }
 

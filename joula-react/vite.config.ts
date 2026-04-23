@@ -8,6 +8,12 @@ export default defineConfig({
   server: {
     port: 3000,
     proxy: {
+      // Forward /api/* to the live server (new PHP endpoints)
+      '/api': {
+        target: 'https://myjoula.com/mobile',
+        changeOrigin: true,
+        secure: true,
+      },
       // Forward all /mobile/* requests to the live GoDaddy server
       // This avoids CORS issues when developing locally
       '/mobile': {

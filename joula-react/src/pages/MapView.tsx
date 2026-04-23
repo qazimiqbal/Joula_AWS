@@ -3,20 +3,26 @@ import { useSearchParams } from 'react-router-dom'
 import {
   Box,
   Paper,
-  TextField,
-  Button,
-  Typography,
   CircularProgress,
   Alert,
-  List,
-  ListItem,
-  ListItemText,
+  Typography,
 } from '@mui/material'
 import { MapContainer, TileLayer, CircleMarker, Popup, useMap } from 'react-leaflet'
 import apiService from '@services/api'
 import { AddressRecord } from '@/types'
 
 const DEFAULT_CENTER: [number, number] = [33.749, -84.388]
+
+function getMarkerColor(lastVisit?: string): string {
+  if (!lastVisit) return '#d32f2f' // red - never visited
+  const visited = new Date(lastVisit)
+  if (isNaN(visited.getTime())) return '#d32f2f'
+  const daysSince = (Date.now() - visited.getTime()) / (1000 * 60 * 60 * 24)
+  if (daysSince < 30) return '#42DB35'   // green  - less than 30 days
+  if (daysSince < 60) return '#ED914C'   // orange - 30-60 days
+  if (daysSince < 90) return '#FAED0A'   // yellow - 60-90 days
+  return '#29b6f6'                        // light blue - more than 90 days
+}
 
 const MapViewport: React.FC<{ center: [number, number] }> = ({ center }) => {
   const map = useMap()
@@ -31,7 +37,6 @@ const MapViewport: React.FC<{ center: [number, number] }> = ({ center }) => {
 const MapView: React.FC = () => {
   const [searchParams] = useSearchParams()
   const [addresses, setAddresses] = useState<AddressRecord[]>([])
-  const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null)
@@ -90,124 +95,14 @@ const MapView: React.FC = () => {
     }
   }, [searchParams])
 
-  const handleSearch = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setLoading(true)
-    setError('')
-
-    try {
-      const data = await apiService.getAddresses({ search, limit: 20 })
-      setAddresses(data)
-      if (data.length > 0) {
-        setMapCenter([data[0].latitude, data[0].longitude])
-      }
-    } catch (err: any) {
-      setError(err.message || 'Failed to search addresses')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const handleNearby = async () => {
-    if (!userLocation) {
-      setError('Location not available. Please enable location services.')
-      return
-    }
-
-    setLoading(true)
-    setError('')
-
-    try {
-      const data = await apiService.searchAddressesByLocation(
-        userLocation.lat,
-        userLocation.lng,
-        10
-      )
-      setAddresses(data)
-      if (data.length > 0) {
-        setMapCenter([data[0].latitude, data[0].longitude])
-      }
-    } catch (err: any) {
-      setError(err.message || 'Failed to find nearby addresses')
-    } finally {
-      setLoading(false)
-    }
-  }
-
   return (
-    <Box
-      sx={{
-        display: 'grid',
-        gridTemplateColumns: { xs: '1fr', md: '300px 1fr' },
-        gridTemplateRows: { xs: 'auto 1fr', md: '1fr' },
-        gap: 2,
-        minHeight: { xs: 'auto', md: 600 },
-      }}
-    >
-      {/* Sidebar */}
-      <Paper elevation={1} sx={{ p: 2, display: 'flex', flexDirection: 'column' }}>
-        <Typography variant="h6" gutterBottom>
-          Search Addresses
-        </Typography>
+    <Box sx={{ height: 'calc(100vh - 112px)', display: 'flex', flexDirection: 'column' }}>
+      {error && <Alert severity="error" sx={{ mb: 1 }}>{error}</Alert>}
+      {loading && <Box display="flex" justifyContent="center" py={2}><CircularProgress /></Box>}
 
-        <form onSubmit={handleSearch} style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-          <TextField
-            size="small"
-            placeholder="Search addresses by name or street..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            fullWidth
-            disabled={loading}
-          />
-          <Button type="submit" variant="contained" disabled={loading} sx={{ minWidth: 80 }}>
-            Search
-          </Button>
-        </form>
-
-        <Button
-          variant="outlined"
-          onClick={handleNearby}
-          disabled={loading || !userLocation}
-          fullWidth
-          sx={{ mb: 2 }}
-        >
-          Find Nearby
-        </Button>
-
-        {error && (
-          <Alert severity="error" sx={{ mb: 2 }}>
-            {error}
-          </Alert>
-        )}
-
-        {loading ? (
-          <Box display="flex" justifyContent="center" py={2}>
-            <CircularProgress />
-          </Box>
-        ) : (
-          <List sx={{ flexGrow: 1, overflow: 'auto' }}>
-            {addresses.map((address) => (
-              <ListItem
-                key={address.id}
-                divider
-                button
-                onClick={() => setMapCenter([address.latitude, address.longitude])}
-              >
-                <ListItemText
-                  primary={address.name}
-                  secondary={`📍 ${address.address}${
-                    address.distance ? ` (${address.distance.toFixed(2)} km)` : ''
-                  }`}
-                />
-              </ListItem>
-            ))}
-          </List>
-        )}
-      </Paper>
-
-      <Paper elevation={1} sx={{ p: 1, minHeight: { xs: 320, md: 'auto' } }}
-      >
+      <Paper elevation={1} sx={{ p: 0, flexGrow: 1 }}>
         <MapContainer
+          {...{ center: mapCenter, zoom: 11 } as object}
           style={{ height: '100%', minHeight: 'inherit', width: '100%' }}
         >
           <MapViewport center={mapCenter} />
@@ -219,18 +114,45 @@ const MapView: React.FC = () => {
             </CircleMarker>
           )}
 
-          {addresses.map((address) => (
+          {addresses.map((address) => {
+            const color = getMarkerColor(address.lastVisit)
+            return (
             <CircleMarker
               key={address.id}
               center={[address.latitude, address.longitude]}
-              pathOptions={{ color: '#d32f2f' }}
+              {...{ radius: 5 } as object}
+              pathOptions={{ color: '#333', weight: 1, fillColor: color, fillOpacity: 1 }}
             >
               <Popup>
-                <Typography variant="subtitle2">{address.name}</Typography>
-                <Typography variant="body2">{address.address}</Typography>
+                <Typography variant="subtitle2" sx={{ fontWeight: 'bold', mb: 0.5 }}>{address.name}</Typography>
+                {address.city && (
+                  <Typography variant="body2"><strong>City:</strong> {address.city}</Typography>
+                )}
+                <Typography variant="body2">
+                  <strong>Address:</strong>{' '}
+                  {[address.aptNo, address.houseNo, address.streetName, address.city, address.state, address.zip]
+                    .filter(Boolean).join(', ')}
+                </Typography>
+                {address.lastVisit && (
+                  <Typography variant="body2"><strong>Last Visit:</strong> {address.lastVisit}</Typography>
+                )}
+                {!address.lastVisit && (
+                  <Typography variant="body2"><strong>Last Visit:</strong> Never</Typography>
+                )}
+                <a
+                  href={`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(
+                    [address.aptNo, address.houseNo, address.streetName, address.city, address.state, address.zip].filter(Boolean).join(' ')
+                  )}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ display: 'inline-block', marginTop: 6, padding: '4px 8px', background: '#1976d2', color: 'white', borderRadius: 4, textDecoration: 'none', fontSize: 12 }}
+                >
+                  Navigate me here
+                </a>
               </Popup>
             </CircleMarker>
-          ))}
+            )
+          })}
         </MapContainer>
       </Paper>
     </Box>

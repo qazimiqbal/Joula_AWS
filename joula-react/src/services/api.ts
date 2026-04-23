@@ -25,6 +25,8 @@ interface LegacyAddress {
   State: string
   Zip: string
   Locality?: string
+  Last_Visit?: string
+  Apt_No?: string
 }
 
 const toKm = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
@@ -95,6 +97,11 @@ const mapLegacyAddress = (item: LegacyAddress): AddressRecord | null => {
     city: item.City || '',
     state: (item.State || '').trim(),
     locality: (item.Locality || '').trim(),
+    houseNo: (item.H_No || '').trim(),
+    streetName: (item.St_Name || '').trim(),
+    zip: (item.Zip || '').trim(),
+    aptNo: (item.Apt_No || '').trim(),
+    lastVisit: item.Last_Visit || '',
     createdAt: new Date().toISOString(),
   }
 }
@@ -232,10 +239,51 @@ class ApiService {
 
   // Localities for area selection
   async getLocalities(state: string): Promise<string[]> {
-    const response = await this.api.get<{ success: boolean; data: string[] }>('/api/localities.php', {
-      params: { state },
+    try {
+      const response = await this.api.get<{ success: boolean; data: string[] }>('/api/localities.php', {
+        params: { state },
+      })
+      return response.data.data || []
+    } catch {
+      // Fallback for environments where /api/localities.php is not deployed yet.
+      const all = await this.getLegacyAddresses()
+      const targetState = state.trim().toLowerCase()
+      const inState = all.filter((item) => (item.state || '').trim().toLowerCase() === targetState)
+
+      const localityValues = Array.from(
+        new Set(
+          inState
+            .map((item) => (item.locality || '').trim())
+            .filter(Boolean)
+        )
+      )
+
+      // When legacy payload omits Locality field, fall back to City values.
+      if (localityValues.length === 0) {
+        return Array.from(
+          new Set(
+            inState
+              .map((item) => (item.city || '').trim())
+              .filter(Boolean)
+          )
+        ).sort()
+      }
+
+      return localityValues.sort()
+    }
+  }
+
+  private async getLegacyAddresses(locality: string = 'All', area: string = 'All'): Promise<AddressRecord[]> {
+    const response = await this.api.get<LegacyAddress[]>('/getaddressdata.php', {
+      params: {
+        locality,
+        area,
+      },
     })
-    return response.data.data || []
+
+    return (response.data || [])
+      .map((item) => mapLegacyAddress(item))
+      .filter((item): item is AddressRecord => item !== null)
   }
 
   async getAddresses(params?: {
@@ -244,17 +292,43 @@ class ApiService {
     search?: string
     limit?: number
   }): Promise<AddressRecord[]> {
-    const response = await this.api.get<{ success: boolean; data: LegacyAddress[] }>('/api/addresses.php', {
-      params: {
-        state: params?.state,
-        locality: params?.locality,
-        search: params?.search,
-      },
-    })
+    let mapped: AddressRecord[] = []
 
-    const mapped = (response.data.data || [])
-      .map((item) => mapLegacyAddress(item))
-      .filter((item): item is AddressRecord => item !== null)
+    try {
+      const response = await this.api.get<{ success: boolean; data: LegacyAddress[] }>('/api/addresses.php', {
+        params: {
+          state: params?.state,
+          locality: params?.locality,
+          search: params?.search,
+        },
+      })
+
+      mapped = (response.data.data || [])
+        .map((item) => mapLegacyAddress(item))
+        .filter((item): item is AddressRecord => item !== null)
+    } catch {
+      // Fallback for environments where /api/addresses.php is not deployed yet.
+      if (params?.locality && params.locality !== 'All') {
+        mapped = await this.getLegacyAddresses(params.locality, 'All')
+      } else {
+        mapped = await this.getLegacyAddresses()
+      }
+
+      if (params?.state) {
+        const targetState = params.state.trim().toLowerCase()
+        mapped = mapped.filter((item) => (item.state || '').trim().toLowerCase() === targetState)
+      }
+
+      if (params?.search) {
+        const search = params.search.trim().toLowerCase()
+        mapped = mapped.filter(
+          (item) =>
+            item.name.toLowerCase().includes(search) ||
+            item.address.toLowerCase().includes(search) ||
+            (item.city || '').toLowerCase().includes(search)
+        )
+      }
+    }
 
     if (params?.limit && params.limit > 0) {
       return mapped.slice(0, params.limit)

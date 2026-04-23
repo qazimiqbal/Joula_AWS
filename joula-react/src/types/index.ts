@@ -36,7 +36,12 @@ export interface AddressRecord {
   city?: string
   state?: string
   locality?: string
+  houseNo?: string
+  streetName?: string
+  zip?: string
+  aptNo?: string
   distance?: number
+  lastVisit?: string
   createdAt: string
 }
 

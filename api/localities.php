@@ -17,13 +17,7 @@ include('../connection.php.ini');
 mysqli_select_db($con, $db);
 
 $stmt = mysqli_prepare($con,
-        "SELECT DISTINCT TRIM(COALESCE(NULLIF(Locality, ''), City)) AS locality_name
-         FROM Addresses2
-         WHERE TRIM(State) = ?
-             AND Coordinates != ''
-             AND Coordinates != ','
-             AND TRIM(COALESCE(NULLIF(Locality, ''), City)) != ''
-         ORDER BY locality_name"
+    "SELECT DISTINCT Locality FROM Addresses2 WHERE State = ? AND Coordinates != '' ORDER BY Locality"
 );
 if (!$stmt) {
     http_response_code(500);
