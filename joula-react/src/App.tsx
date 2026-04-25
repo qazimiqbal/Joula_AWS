@@ -4,6 +4,7 @@ import {
   Paper, Button,
 } from '@mui/material'
 import HomeIcon from '@mui/icons-material/Home'
+import PersonIcon from '@mui/icons-material/Person'
 import RefreshIcon from '@mui/icons-material/Refresh'
 import LogoutIcon from '@mui/icons-material/Logout'
 import { AuthProvider, useAuth } from './context/AuthContext'
@@ -77,6 +78,11 @@ function AppFooter() {
         onClick={() => navigate('/dashboard')}
         sx={{ color: 'white', textTransform: 'none' }}
       >Home</Button>
+      <Button
+        startIcon={<PersonIcon />}
+        onClick={() => navigate('/profile')}
+        sx={{ color: 'white', textTransform: 'none' }}
+      >Profile</Button>
       <Button
         startIcon={<RefreshIcon />}
         onClick={() => window.location.reload()}
