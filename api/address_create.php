@@ -16,7 +16,22 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 }
 
 include('db.php');
-mysqli_select_db($con, $db);
+
+// Resolve uploaded_by from Bearer token (optional — NULL if not authenticated)
+$uploadedBy = null;
+$authHeader = isset($_SERVER['HTTP_AUTHORIZATION']) ? $_SERVER['HTTP_AUTHORIZATION'] : '';
+if (strpos($authHeader, 'Bearer ') === 0) {
+    $token = substr($authHeader, 7);
+    $stmtU = mysqli_prepare($con, "SELECT id FROM Login_user_AWS WHERE auth_token = ? AND status = 'true' LIMIT 1");
+    if ($stmtU) {
+        mysqli_stmt_bind_param($stmtU, 's', $token);
+        mysqli_stmt_execute($stmtU);
+        $tmpId = null;
+        mysqli_stmt_bind_result($stmtU, $tmpId);
+        if (mysqli_stmt_fetch($stmtU)) $uploadedBy = intval($tmpId);
+        mysqli_stmt_close($stmtU);
+    }
+}
 
 $input = json_decode(file_get_contents('php://input'), true);
 if (!is_array($input)) {
@@ -39,10 +54,27 @@ $comments = isset($input['comments']) ? trim($input['comments']) : '';
 $latitude = isset($input['latitude']) ? trim((string)$input['latitude']) : '';
 $longitude = isset($input['longitude']) ? trim((string)$input['longitude']) : '';
 
-if ($name === '' || $houseNo === '' || $streetName === '' || $city === '' || $state === '' || $zip === '' || $locality === '') {
+$hasCoordinates = ($latitude !== '' && $longitude !== '');
+
+if ($name === '') {
     http_response_code(400);
-    echo json_encode(array('success' => false, 'message' => 'Name, house number, street name, city, state, zip, and locality are required'));
+    echo json_encode(array('success' => false, 'message' => 'Name is required'));
     exit;
+}
+
+if (!$hasCoordinates && ($houseNo === '' || $streetName === '' || $city === '' || $state === '' || $zip === '' || $locality === '')) {
+    http_response_code(400);
+    echo json_encode(array('success' => false, 'message' => 'Provide full address fields, or include coordinates from current location'));
+    exit;
+}
+
+if ($hasCoordinates) {
+    if ($houseNo === '') $houseNo = 'GPS';
+    if ($streetName === '') $streetName = 'Current Location';
+    if ($city === '') $city = 'Unknown';
+    if ($state === '') $state = 'GA';
+    if ($zip === '') $zip = '00000';
+    if ($locality === '') $locality = 'Unassigned';
 }
 
 $checkStmt = mysqli_prepare($con, 'SELECT ID FROM Addresses_AWS WHERE Name = ? AND H_No = ? LIMIT 1');
@@ -65,10 +97,11 @@ if ($latitude !== '' && $longitude !== '') {
 
 $area = 'unclassified';
 $status = 'Muslim';
+$clear = 0;
 
 $stmt = mysqli_prepare(
     $con,
-    'INSERT INTO Addresses_AWS (Name, Halaqa, H_No, Apt_No, St_Name, City, State, Zip, Verified, Masjid, Comments, Last_Visit, Coordinates, Locality, Area, Status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO Addresses_AWS (Name, Halaqa, H_No, Apt_No, St_Name, City, State, Zip, Verified, Masjid, Comments, Last_Visit, Coordinates, Locality, Area, Status, `Clear`, uploaded_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
 );
 
 if (!$stmt) {
@@ -79,7 +112,7 @@ if (!$stmt) {
 
 mysqli_stmt_bind_param(
     $stmt,
-    'ssssssssssssssss',
+    'ssssssssssssssssii',
     $name,
     $halaqa,
     $houseNo,
@@ -95,7 +128,9 @@ mysqli_stmt_bind_param(
     $coordinates,
     $locality,
     $area,
-    $status
+    $status,
+    $clear,
+    $uploadedBy
 );
 
 if (!mysqli_stmt_execute($stmt)) {

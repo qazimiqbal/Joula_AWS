@@ -13,27 +13,42 @@ $state = isset($_GET['state']) ? trim($_GET['state']) : '';
 $locality = isset($_GET['locality']) ? trim($_GET['locality']) : '';
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 
-$sql = "SELECT ID, Name, City, Coordinates, H_No, St_Name, State, Zip, Locality, Last_Visit, Apt_No, Comments
-        FROM Addresses_AWS
-    WHERE Coordinates != '' AND Coordinates != ',' AND COALESCE(`Clear`, 1) = 1";
+$hasCoordinates = false;
+$colResult = mysqli_query($con, "SHOW COLUMNS FROM Masjids_AWS LIKE 'Coordinates'");
+if ($colResult) {
+    $hasCoordinates = mysqli_num_rows($colResult) > 0;
+    mysqli_free_result($colResult);
+}
+
+$selectCoordinates = $hasCoordinates ? 'm.Coordinates' : "'' AS Coordinates";
+
+$sql = "SELECT m.ID, m.Name, m.H_No, m.Apt_No, m.St_Name, m.City, m.State, m.Zip, $selectCoordinates
+        FROM Masjids_AWS m
+        WHERE COALESCE(m.`Clear`, 1) = 1";
 $params = array();
 $types = '';
 
 if ($state !== '') {
-    $sql .= " AND TRIM(State) = ?";
+    $sql .= " AND TRIM(m.State) = ?";
     $types .= 's';
     $params[] = $state;
 }
 
 if ($locality !== '' && strcasecmp($locality, 'All') !== 0) {
-    $sql .= " AND TRIM(Locality) = ?";
+    $sql .= " AND EXISTS (
+        SELECT 1
+        FROM Addresses_AWS a
+        WHERE a.Masjid = m.Name
+          AND TRIM(a.Locality) = ?
+          AND TRIM(a.State) = TRIM(m.State)
+    )";
     $types .= 's';
     $params[] = $locality;
 }
 
 if ($search !== '') {
     $searchLike = '%' . $search . '%';
-    $sql .= " AND (Name LIKE ? OR H_No LIKE ? OR St_Name LIKE ? OR City LIKE ? OR Zip LIKE ?)";
+    $sql .= " AND (m.Name LIKE ? OR m.H_No LIKE ? OR m.St_Name LIKE ? OR m.City LIKE ? OR m.Zip LIKE ?)";
     $types .= 'sssss';
     $params[] = $searchLike;
     $params[] = $searchLike;
@@ -42,7 +57,7 @@ if ($search !== '') {
     $params[] = $searchLike;
 }
 
-$sql .= " ORDER BY Name";
+$sql .= " ORDER BY m.Name";
 
 $stmt = mysqli_prepare($con, $sql);
 if (!$stmt) {
@@ -61,23 +76,20 @@ if (!empty($params)) {
 }
 
 mysqli_stmt_execute($stmt);
-mysqli_stmt_bind_result($stmt, $id, $name, $city, $coordinates, $houseNo, $streetName, $recordState, $zip, $recordLocality, $lastVisit, $aptNo, $comments);
+mysqli_stmt_bind_result($stmt, $id, $name, $houseNo, $aptNo, $streetName, $city, $recordState, $zip, $coordinates);
 
 $rows = array();
 while (mysqli_stmt_fetch($stmt)) {
     $rows[] = array(
         'ID' => $id,
         'Name' => $name,
-        'City' => $city,
-        'Coordinates' => $coordinates,
         'H_No' => $houseNo,
+        'Apt_No' => $aptNo,
         'St_Name' => $streetName,
+        'City' => $city,
         'State' => $recordState,
         'Zip' => $zip,
-        'Locality' => $recordLocality,
-        'Last_Visit' => $lastVisit,
-        'Apt_No' => $aptNo,
-        'Comments' => $comments
+        'Coordinates' => $coordinates,
     );
 }
 

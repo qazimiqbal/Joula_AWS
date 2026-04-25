@@ -10,9 +10,10 @@ import {
   TableCell,
   TableRow,
 } from '@mui/material'
-import { MapContainer, TileLayer, CircleMarker, Popup, useMap } from 'react-leaflet'
+import { MapContainer, TileLayer, CircleMarker, Popup, Marker, useMap } from 'react-leaflet'
+import L from 'leaflet'
 import apiService from '@services/api'
-import { AddressRecord } from '@/types'
+import { AddressRecord, Masjid, PendingGeocodeRecord } from '@/types'
 
 const truncatePopupText = (value?: string, maxLength: number = 80): string => {
   if (!value) return 'None'
@@ -20,6 +21,14 @@ const truncatePopupText = (value?: string, maxLength: number = 80): string => {
 }
 
 const DEFAULT_CENTER: [number, number] = [33.749, -84.388]
+const MASJID_PNG_SRC = `${import.meta.env.BASE_URL}masjid-marker.png`
+const MASJID_DIV_ICON = L.divIcon({
+  html: `<img src="${MASJID_PNG_SRC}" style="width:36px;height:36px;display:block;" />`,
+  className: '',
+  iconSize: [36, 36],
+  iconAnchor: [18, 18],
+  popupAnchor: [0, -20],
+})
 
 function getMarkerColor(lastVisit?: string): string {
   if (!lastVisit) return '#d32f2f' // red - never visited
@@ -45,10 +54,13 @@ const MapViewport: React.FC<{ center: [number, number] }> = ({ center }) => {
 const MapView: React.FC = () => {
   const [searchParams] = useSearchParams()
   const [addresses, setAddresses] = useState<AddressRecord[]>([])
+  const [masjids, setMasjids] = useState<Masjid[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null)
   const [mapCenter, setMapCenter] = useState<[number, number]>(DEFAULT_CENTER)
+  const [reviewMarker, setReviewMarker] = useState<{ lat: number; lng: number; id?: string; name?: string; type?: 'masjid' | 'address' } | null>(null)
+  const [reviewMarkers, setReviewMarkers] = useState<PendingGeocodeRecord[]>([])
 
   useEffect(() => {
     const stateParam = searchParams.get('state')
@@ -56,6 +68,52 @@ const MapView: React.FC = () => {
     const radiusParam = searchParams.get('radius')
     const latParam = searchParams.get('lat')
     const lngParam = searchParams.get('lng')
+    const reviewLatParam = searchParams.get('reviewLat')
+    const reviewLngParam = searchParams.get('reviewLng')
+    const reviewIdParam = searchParams.get('reviewId')
+    const reviewNameParam = searchParams.get('reviewName')
+    const reviewTypeParam = searchParams.get('reviewType')
+    const reviewAllParam = searchParams.get('reviewAll')
+
+    if (reviewAllParam === '1') {
+      setLoading(true)
+      setError('')
+      setReviewMarker(null)
+      Promise.all([apiService.getGeocodeReviewList(), apiService.getMasjids()]).then(([data, masjidData]) => {
+        const withCoordinates = data.filter(
+          (item) => typeof item.latitude === 'number' && typeof item.longitude === 'number'
+        )
+        setReviewMarkers(withCoordinates)
+        setMasjids(masjidData)
+        if (withCoordinates.length > 0) {
+          setMapCenter([withCoordinates[0].latitude as number, withCoordinates[0].longitude as number])
+        }
+        setLoading(false)
+      }).catch(() => {
+        setError('Failed to load geocoded review markers')
+        setLoading(false)
+      })
+      return
+    }
+
+    setReviewMarkers([])
+
+    if (reviewLatParam && reviewLngParam) {
+      const reviewLat = parseFloat(reviewLatParam)
+      const reviewLng = parseFloat(reviewLngParam)
+      if (!Number.isNaN(reviewLat) && !Number.isNaN(reviewLng)) {
+        setReviewMarker({
+          lat: reviewLat,
+          lng: reviewLng,
+          id: reviewIdParam || undefined,
+          name: reviewNameParam || undefined,
+          type: reviewTypeParam === 'masjid' ? 'masjid' : 'address',
+        })
+        setMapCenter([reviewLat, reviewLng])
+      }
+    } else {
+      setReviewMarker(null)
+    }
 
     if (radiusParam && latParam && lngParam) {
       // Radius search — location provided via URL params
@@ -65,25 +123,40 @@ const MapView: React.FC = () => {
       setUserLocation({ lat, lng })
       setMapCenter([lat, lng])
       setLoading(true)
-      apiService.searchAddressesByLocation(lat, lng, radius).then((data) => {
-        setAddresses(data)
+      Promise.all([
+        apiService.searchAddressesByLocation(lat, lng, radius),
+        apiService.searchMasjidsByLocation(lat, lng, radius),
+      ]).then(([addressData, masjidData]) => {
+        setAddresses(addressData)
+        setMasjids(masjidData)
         setLoading(false)
       }).catch(() => {
-        setError('Failed to load nearby addresses')
+        setError('Failed to load nearby records')
         setLoading(false)
       })
     } else if (stateParam) {
       // State/locality filter
       setLoading(true)
-      apiService.getAddresses({
-        state: stateParam,
-        locality: localityParam || undefined,
-      }).then((data) => {
-        setAddresses(data)
-        if (data.length > 0) setMapCenter([data[0].latitude, data[0].longitude])
+      Promise.all([
+        apiService.getAddresses({
+          state: stateParam,
+          locality: localityParam || undefined,
+        }),
+        apiService.getMasjids({
+          state: stateParam,
+          locality: localityParam || undefined,
+        }),
+      ]).then(([addressData, masjidData]) => {
+        setAddresses(addressData)
+        setMasjids(masjidData)
+        if (addressData.length > 0) {
+          setMapCenter([addressData[0].latitude, addressData[0].longitude])
+        } else if (masjidData.length > 0 && typeof masjidData[0].latitude === 'number' && typeof masjidData[0].longitude === 'number') {
+          setMapCenter([masjidData[0].latitude, masjidData[0].longitude])
+        }
         setLoading(false)
       }).catch(() => {
-        setError('Failed to load addresses')
+        setError('Failed to load state records')
         setLoading(false)
       })
     } else {
@@ -94,6 +167,9 @@ const MapView: React.FC = () => {
             const location = { lat: position.coords.latitude, lng: position.coords.longitude }
             setUserLocation(location)
             setMapCenter([location.lat, location.lng])
+            apiService.searchMasjidsByLocation(location.lat, location.lng, 50)
+              .then((data) => setMasjids(data))
+              .catch(() => setMasjids([]))
           },
           () => {
             setError('Unable to get your location. Please enable location services.')
@@ -121,6 +197,71 @@ const MapView: React.FC = () => {
               <Popup>Your location</Popup>
             </CircleMarker>
           )}
+
+          {reviewMarker && reviewMarker.type === 'masjid' && (
+            <Marker
+              position={[reviewMarker.lat, reviewMarker.lng]}
+              {...{ icon: MASJID_DIV_ICON } as object}
+            >
+              <Popup>
+                <strong>Pending Masjid Review</strong><br />
+                {reviewMarker.name || 'Masjid'}
+                {reviewMarker.id ? ` (ID: ${reviewMarker.id})` : ''}
+              </Popup>
+            </Marker>
+          )}
+          {reviewMarker && reviewMarker.type !== 'masjid' && (
+            <CircleMarker
+              center={[reviewMarker.lat, reviewMarker.lng]}
+              {...{ radius: 8 } as object}
+              pathOptions={{ color: '#000000', weight: 2, fillColor: '#000000', fillOpacity: 0.95 }}
+            >
+              <Popup>
+                <strong>Pending Geocode Review</strong><br />
+                {reviewMarker.name || 'Address'}
+                {reviewMarker.id ? ` (ID: ${reviewMarker.id})` : ''}
+              </Popup>
+            </CircleMarker>
+          )}
+
+          {reviewMarkers.map((marker) => (
+            <CircleMarker
+              key={`review-${marker.id}`}
+              center={[marker.latitude as number, marker.longitude as number]}
+              {...{ radius: 7 } as object}
+              pathOptions={{ color: '#000000', weight: 1.5, fillColor: '#000000', fillOpacity: 0.9 }}
+            >
+              <Popup>
+                <strong>Pending Geocode Review</strong><br />
+                {marker.name} (ID: {marker.id})<br />
+                {[marker.aptNo, marker.houseNo, marker.streetName, marker.city, marker.state, marker.zip]
+                  .filter(Boolean)
+                  .join(', ')}
+              </Popup>
+            </CircleMarker>
+          ))}
+
+          {masjids
+            .filter((masjid) => typeof masjid.latitude === 'number' && typeof masjid.longitude === 'number')
+            .map((masjid) => {
+              const masjidAddress = [masjid.aptNo, masjid.houseNo, masjid.streetName, masjid.city, masjid.state, masjid.zip]
+                .filter(Boolean)
+                .join(', ')
+
+              return (
+                <Marker
+                  key={`masjid-${masjid.id}`}
+                  position={[masjid.latitude as number, masjid.longitude as number]}
+                  {...{ icon: MASJID_DIV_ICON } as object}
+                >
+                  <Popup>
+                    <strong>Masjid</strong><br />
+                    {masjid.name}
+                    {masjidAddress ? <><br />{masjidAddress}</> : null}
+                  </Popup>
+                </Marker>
+              )
+            })}
 
           {addresses.map((address) => {
             const color = getMarkerColor(address.lastVisit)

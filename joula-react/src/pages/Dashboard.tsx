@@ -10,10 +10,11 @@ import {
 import { useAuth } from '@/context/AuthContext'
 
 const Dashboard: React.FC = () => {
-  const { user, logout } = useAuth()
+  const { user, logout, subscription } = useAuth()
   const navigate = useNavigate()
 
   const permissionLevel = user?.permissionLevel ?? (user?.role === 'admin' ? 3 : 0)
+  const isOrgAdmin = user?.orgRole === 'org_admin' || subscription?.orgRole === 'org_admin'
   const canAccessStaffActions = permissionLevel > 0
   const canAccessAdminActions = permissionLevel >= 3
 
@@ -78,6 +79,15 @@ const Dashboard: React.FC = () => {
                 <Button
                   fullWidth
                   variant="outlined"
+                  onClick={() => navigate('/masjids/new')}
+                >
+                  Add New Masjid
+                </Button>
+              </Grid>
+              <Grid item xs={12} sm={6} md={4}>
+                <Button
+                  fullWidth
+                  variant="outlined"
                   color="secondary"
                   onClick={() => navigate('/missing-coordinates')}
                 >
@@ -98,16 +108,52 @@ const Dashboard: React.FC = () => {
           </Grid>
 
           {canAccessAdminActions && (
-            <Grid item xs={12} sm={6} md={4}>
-              <Button
-                fullWidth
-                variant="outlined"
-                color="warning"
-                onClick={() => navigate('/pending-users')}
-              >
-                Approve New Users
-              </Button>
-            </Grid>
+            <>
+              <Grid item xs={12} sm={6} md={4}>
+                <Button
+                  fullWidth
+                  variant="outlined"
+                  color="warning"
+                  onClick={() => navigate('/pending-users')}
+                >
+                  Approve New Users
+                </Button>
+              </Grid>
+              <Grid item xs={12} sm={6} md={4}>
+                <Button
+                  fullWidth
+                  variant="outlined"
+                  color="info"
+                  onClick={() => navigate('/geocode-review')}
+                >
+                  Review/Approve Submissions
+                </Button>
+              </Grid>
+            </>
+          )}
+
+          {isOrgAdmin && (
+            <>
+              <Grid item xs={12} sm={6} md={4}>
+                <Button
+                  fullWidth
+                  variant="outlined"
+                  color="secondary"
+                  onClick={() => navigate('/org-users')}
+                >
+                  Manage Team
+                </Button>
+              </Grid>
+              <Grid item xs={12} sm={6} md={4}>
+                <Button
+                  fullWidth
+                  variant="outlined"
+                  onClick={() => navigate('/billing')}
+                >
+                  Subscription &amp; Billing
+                </Button>
+              </Grid>
+            </>
           )}
         </Grid>
       </Paper>

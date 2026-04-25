@@ -6,6 +6,7 @@ export interface User {
   phone?: string
   role: 'user' | 'admin'
   permissionLevel?: number
+  orgRole?: 'org_admin' | 'editor' | 'viewer'
   createdAt: string
 }
 
@@ -14,8 +15,8 @@ export interface Masjid {
   id: number
   name: string
   address: string
-  latitude: number
-  longitude: number
+  latitude?: number
+  longitude?: number
   city?: string
   phone?: string
   website?: string
@@ -23,6 +24,10 @@ export interface Masjid {
   prayerTimes?: PrayerTime[]
   distance?: number
   state?: string
+  houseNo?: string
+  aptNo?: string
+  streetName?: string
+  zip?: string
   locality?: string
   createdAt: string
 }
@@ -79,6 +84,41 @@ export interface LoginRequest {
 export interface AuthResponse {
   token: string
   user: User
+  subscription?: SubscriptionInfo | null
+}
+
+// Subscription / Billing types
+export type PlanStatus = 'trial' | 'active' | 'past_due' | 'cancelled' | 'expired'
+
+export interface SubscriptionInfo {
+  orgId: number
+  orgName?: string
+  orgRole: 'org_admin' | 'editor' | 'viewer'
+  planStatus: PlanStatus
+  trialEndsAt: string
+  trialDaysLeft: number
+  hasPaymentMethod?: boolean
+  maxEditors: number
+  maxViewers: number
+  monthlyPriceCents?: number
+  stripePublishableKey?: string
+}
+
+export interface OrgUser {
+  id: number
+  username: string
+  email: string
+  phone: string
+  orgRole: 'org_admin' | 'editor' | 'viewer'
+  status: string
+}
+
+export interface OrgUsersResponse {
+  users: OrgUser[]
+  editorCount: number
+  viewerCount: number
+  maxEditors: number
+  maxViewers: number
 }
 
 export interface RegisterRequest {
@@ -108,9 +148,48 @@ export interface MissingCoordinatesRecord {
   locality?: string
 }
 
+export interface PendingGeocodeRecord {
+  id: number
+  name: string
+  houseNo: string
+  aptNo?: string
+  streetName: string
+  city: string
+  state: string
+  zip: string
+  locality?: string
+  latitude?: number | null
+  longitude?: number | null
+  uploadedBy?: number | null
+  submittedBy?: string
+}
+
+export interface PendingMasjidRecord {
+  id: number
+  name: string
+  houseNo: string
+  aptNo?: string
+  streetName: string
+  city: string
+  state: string
+  zip: string
+  createdBy?: number | null
+  submittedBy?: string
+}
+
+export interface CreateMasjidRequest {
+  name: string
+  houseNo: string
+  aptNo?: string
+  streetName: string
+  city: string
+  state: string
+  zip: string
+}
+
 export interface CreateAddressRequest {
   name: string
-  halaqa: string
+  halaqa?: string
   houseNo: string
   aptNo?: string
   streetName: string
@@ -118,10 +197,18 @@ export interface CreateAddressRequest {
   state: string
   zip: string
   locality: string
-  verified: 'Y' | 'N'
+  verified?: 'Y' | 'N'
   masjid?: string
   lastVisit?: string
   comments?: string
   latitude?: number
   longitude?: number
+}
+
+export interface ImportAddressesResponse {
+  success: boolean
+  inserted: number
+  skipped: number
+  errors: Array<{ row: number; message: string }>
+  message: string
 }

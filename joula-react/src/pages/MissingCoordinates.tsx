@@ -9,7 +9,9 @@ import {
   Table,
   TableBody,
   TableCell,
+  TableContainer,
   TableHead,
+  TablePagination,
   TableRow,
   Typography,
   Chip,
@@ -31,6 +33,8 @@ const MissingCoordinates: React.FC = () => {
   const [pageError, setPageError] = useState('')
   const [addresses, setAddresses] = useState<MissingCoordinatesRecord[]>([])
   const [rowStates, setRowStates] = useState<Record<number, RowState>>({})
+  const [page, setPage] = useState(0)
+  const [rowsPerPage, setRowsPerPage] = useState(10)
 
   const loadAddresses = useCallback(async () => {
     setLoading(true)
@@ -38,6 +42,7 @@ const MissingCoordinates: React.FC = () => {
     try {
       const data = await apiService.getMissingCoordinates()
       setAddresses(data)
+      setPage(0)
       const initial: Record<number, RowState> = {}
       data.forEach((a) => { initial[a.id] = { status: 'idle' } })
       setRowStates(initial)
@@ -68,16 +73,7 @@ const MissingCoordinates: React.FC = () => {
 
     setRow(a.id, { status: 'geocoding' })
     try {
-      const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(query)}`
-      const res = await fetch(url, { headers: { Accept: 'application/json' } })
-      if (!res.ok) throw new Error('Geocoder request failed')
-      const results = (await res.json()) as Array<{ lat: string; lon: string }>
-      if (!Array.isArray(results) || results.length === 0) {
-        throw new Error('No coordinates found')
-      }
-      const lat = Number(results[0].lat)
-      const lng = Number(results[0].lon)
-      if (Number.isNaN(lat) || Number.isNaN(lng)) throw new Error('Invalid coordinates returned')
+      const { lat, lng } = await apiService.geocodeAddress(query)
 
       setRow(a.id, { status: 'saving', lat, lng })
       await apiService.saveCoordinates(a.id, lat, lng)
@@ -99,6 +95,16 @@ const MissingCoordinates: React.FC = () => {
   }
 
   const pendingCount = addresses.filter((a) => rowStates[a.id]?.status !== 'done').length
+  const pagedAddresses = addresses.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage)
+
+  const handleChangePage = (_event: unknown, newPage: number) => {
+    setPage(newPage)
+  }
+
+  const handleChangeRowsPerPage = (event: React.ChangeEvent<HTMLInputElement>) => {
+    setRowsPerPage(parseInt(event.target.value, 10))
+    setPage(0)
+  }
 
   return (
     <Box sx={{ maxWidth: 1200, mx: 'auto', px: 2, py: 3 }}>
@@ -129,56 +135,69 @@ const MissingCoordinates: React.FC = () => {
         <Alert severity="success">All addresses have coordinates.</Alert>
       ) : (
         <Paper elevation={1}>
-          <Table size="small">
-            <TableHead>
-              <TableRow sx={{ bgcolor: 'grey.100' }}>
-                <TableCell>Name</TableCell>
-                <TableCell>Address</TableCell>
-                <TableCell>City</TableCell>
-                <TableCell>State</TableCell>
-                <TableCell>Locality</TableCell>
-                <TableCell align="right">Action</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {addresses.map((a) => {
-                const rs = rowStates[a.id] ?? { status: 'idle' }
-                const fullAddress = [a.aptNo, a.houseNo, a.streetName].filter(Boolean).join(' ')
-                const isBusy = rs.status === 'geocoding' || rs.status === 'saving'
-                return (
-                  <TableRow key={a.id} sx={{ opacity: rs.status === 'done' ? 0.5 : 1 }}>
-                    <TableCell>{a.name}</TableCell>
-                    <TableCell>{fullAddress}</TableCell>
-                    <TableCell>{a.city}</TableCell>
-                    <TableCell>{a.state}</TableCell>
-                    <TableCell>{a.locality || '—'}</TableCell>
-                    <TableCell align="right">
-                      {rs.status === 'done' ? (
-                        <CheckCircleIcon color="success" fontSize="small" />
-                      ) : rs.status === 'error' ? (
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, justifyContent: 'flex-end' }}>
-                          <Typography variant="caption" color="error">{rs.errorMsg}</Typography>
-                          <Button size="small" variant="outlined" color="error" onClick={() => handleGeocode(a)}>
-                            Retry
+          <TableContainer sx={{ overflowX: 'auto' }}>
+            <Table size="small" sx={{ minWidth: 900 }}>
+              <TableHead>
+                <TableRow sx={{ bgcolor: 'grey.100' }}>
+                  <TableCell sx={{ whiteSpace: 'nowrap' }}>Name</TableCell>
+                  <TableCell sx={{ whiteSpace: 'nowrap' }}>Address</TableCell>
+                  <TableCell sx={{ whiteSpace: 'nowrap' }}>City</TableCell>
+                  <TableCell sx={{ whiteSpace: 'nowrap' }}>State</TableCell>
+                  <TableCell sx={{ whiteSpace: 'nowrap' }}>Locality</TableCell>
+                  <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>Action</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {pagedAddresses.map((a) => {
+                  const rs = rowStates[a.id] ?? { status: 'idle' }
+                  const fullAddress = [a.aptNo, a.houseNo, a.streetName].filter(Boolean).join(' ')
+                  const isBusy = rs.status === 'geocoding' || rs.status === 'saving'
+                  return (
+                    <TableRow key={a.id} sx={{ opacity: rs.status === 'done' ? 0.5 : 1 }}>
+                      <TableCell sx={{ whiteSpace: 'nowrap' }}>{a.name}</TableCell>
+                      <TableCell sx={{ whiteSpace: 'nowrap' }}>{fullAddress}</TableCell>
+                      <TableCell sx={{ whiteSpace: 'nowrap' }}>{a.city}</TableCell>
+                      <TableCell sx={{ whiteSpace: 'nowrap' }}>{a.state}</TableCell>
+                      <TableCell sx={{ whiteSpace: 'nowrap' }}>{a.locality || '—'}</TableCell>
+                      <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
+                        {rs.status === 'done' ? (
+                          <CheckCircleIcon color="success" fontSize="small" />
+                        ) : rs.status === 'error' ? (
+                          <>
+                            <Typography component="span" variant="caption" color="error" sx={{ mr: 1 }}>
+                              {rs.errorMsg}
+                            </Typography>
+                            <Button size="small" variant="text" color="error" onClick={() => handleGeocode(a)}>
+                              Retry
+                            </Button>
+                          </>
+                        ) : (
+                          <Button
+                            size="small"
+                            variant="text"
+                            onClick={() => handleGeocode(a)}
+                            disabled={isBusy}
+                            startIcon={isBusy ? <CircularProgress size={14} /> : undefined}
+                          >
+                            {rs.status === 'geocoding' ? 'Geocoding…' : rs.status === 'saving' ? 'Saving…' : 'Geocode'}
                           </Button>
-                        </Box>
-                      ) : (
-                        <Button
-                          size="small"
-                          variant="outlined"
-                          onClick={() => handleGeocode(a)}
-                          disabled={isBusy}
-                          startIcon={isBusy ? <CircularProgress size={14} /> : undefined}
-                        >
-                          {rs.status === 'geocoding' ? 'Geocoding…' : rs.status === 'saving' ? 'Saving…' : 'Geocode'}
-                        </Button>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                )
-              })}
-            </TableBody>
-          </Table>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
+              </TableBody>
+            </Table>
+          </TableContainer>
+          <TablePagination
+            component="div"
+            count={addresses.length}
+            page={page}
+            onPageChange={handleChangePage}
+            rowsPerPage={rowsPerPage}
+            onRowsPerPageChange={handleChangeRowsPerPage}
+            rowsPerPageOptions={[5, 10, 25, 50]}
+          />
         </Paper>
       )}
     </Box>

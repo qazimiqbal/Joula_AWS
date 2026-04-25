@@ -77,7 +77,7 @@ Update database credentials:
 DB_HOST=localhost
 DB_USER=root
 DB_PASSWORD=your_mysql_password
-DB_NAME=joula
+DB_NAME=Joula_AWS
 JWT_SECRET=your-secure-random-string
 ```
 
@@ -110,7 +110,7 @@ Create a migration script from your existing PHP application:
 // migrate_to_new_db.php - Run this once to migrate existing data
 
 $oldDb = new mysqli('localhost', 'user', 'pass', 'old_joula');
-$newDb = new mysqli('localhost', 'root', 'password', 'joula');
+$newDb = new mysqli('localhost', 'root', 'password', 'Joula_AWS');
 
 // Migrate users
 $result = $oldDb->query("SELECT * FROM users");
@@ -201,7 +201,7 @@ Upload to hosting:
 
 Before deployment:
 ```bash
-mysqldump -u root -p joula > joula_backup_$(date +%Y%m%d).sql
+mysqldump -u root -p Joula_AWS > Joula_AWS_backup_$(date +%Y%m%d).sql
 ```
 
 ## Common PHP to React Mappings
@@ -226,7 +226,7 @@ mysqldump -u root -p joula > joula_backup_$(date +%Y%m%d).sql
 ### Database connection failed
 - Verify MySQL is running
 - Check credentials in `.env`
-- Ensure database `joula` exists
+- Ensure database `Joula_AWS` exists
 
 ### Build errors
 - Run `npm install` to ensure all dependencies

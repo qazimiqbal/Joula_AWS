@@ -1,7 +1,7 @@
 import axios, { AxiosInstance, AxiosError } from 'axios'
-import { ApiResponse, User, Masjid, AddressRecord, LoginRequest, AuthResponse, PrayerTime, RegisterRequest, PendingUser, CreateAddressRequest, MissingCoordinatesRecord } from '@/types'
+import { ApiResponse, User, Masjid, AddressRecord, LoginRequest, AuthResponse, PrayerTime, RegisterRequest, PendingUser, CreateAddressRequest, MissingCoordinatesRecord, PendingGeocodeRecord, SubscriptionInfo, OrgUsersResponse, ImportAddressesResponse, CreateMasjidRequest, PendingMasjidRecord } from '@/types'
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || '/mobile'
+const API_BASE_URL = import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? '' : '/Joula')
 
 interface LegacyAddress {
   ID: string
@@ -16,6 +16,18 @@ interface LegacyAddress {
   Last_Visit?: string
   Apt_No?: string
   Comments?: string
+}
+
+interface LegacyMasjid {
+  ID: string
+  Name: string
+  Coordinates?: string
+  H_No?: string
+  Apt_No?: string
+  St_Name?: string
+  City?: string
+  State?: string
+  Zip?: string
 }
 
 const toKm = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
@@ -63,6 +75,38 @@ const mapLegacyAddress = (item: LegacyAddress): AddressRecord | null => {
     aptNo: (item.Apt_No || '').trim(),
     lastVisit: item.Last_Visit || '',
     comments: (item.Comments || '').trim(),
+    createdAt: new Date().toISOString(),
+  }
+}
+
+const mapLegacyMasjid = (item: LegacyMasjid): Masjid => {
+  const coordinateParts = (item.Coordinates || '').split(',')
+  const latitude = coordinateParts.length === 2 ? Number(coordinateParts[0].trim()) : Number.NaN
+  const longitude = coordinateParts.length === 2 ? Number(coordinateParts[1].trim()) : Number.NaN
+
+  const houseNo = (item.H_No || '').trim()
+  const aptNo = (item.Apt_No || '').trim()
+  const streetName = (item.St_Name || '').trim()
+  const city = (item.City || '').trim()
+  const state = (item.State || '').trim()
+  const zip = (item.Zip || '').trim()
+
+  const address = [aptNo, houseNo, streetName, city, state, zip]
+    .filter(Boolean)
+    .join(', ')
+
+  return {
+    id: Number(item.ID),
+    name: (item.Name || '').trim(),
+    address,
+    latitude: Number.isFinite(latitude) ? latitude : undefined,
+    longitude: Number.isFinite(longitude) ? longitude : undefined,
+    city,
+    state,
+    houseNo,
+    aptNo,
+    streetName,
+    zip,
     createdAt: new Date().toISOString(),
   }
 }
@@ -168,16 +212,51 @@ class ApiService {
   }
 
   // Masjid endpoints
-  async getMasjids(params?: { search?: string; limit?: number; page?: number }): Promise<Masjid[]> {
-    const mapped: Masjid[] = []
+  async getMasjids(params?: { state?: string; locality?: string; search?: string; limit?: number; page?: number }): Promise<Masjid[]> {
+    const response = await this.api.get<{ success: boolean; data: LegacyMasjid[] }>('/api/masjids.php', {
+      params: {
+        state: params?.state,
+        locality: params?.locality,
+        search: params?.search,
+      },
+    })
+
+    const mapped = (response.data.data || []).map((item) => mapLegacyMasjid(item))
+
+    const resolved = await Promise.all(
+      mapped.map(async (masjid) => {
+        if (typeof masjid.latitude === 'number' && typeof masjid.longitude === 'number') {
+          return masjid
+        }
+
+        const parts = [masjid.aptNo, masjid.houseNo, masjid.streetName, masjid.city, masjid.state, masjid.zip]
+          .map((value) => (value || '').trim())
+          .filter(Boolean)
+
+        if (parts.length === 0) {
+          return masjid
+        }
+
+        try {
+          const geo = await this.geocodeAddress(parts.join(' '))
+          return {
+            ...masjid,
+            latitude: geo.lat,
+            longitude: geo.lng,
+          }
+        } catch {
+          return masjid
+        }
+      })
+    )
 
     const search = params?.search?.trim().toLowerCase()
     const filtered = search
-      ? mapped.filter(
+      ? resolved.filter(
           (masjid) =>
             masjid.name.toLowerCase().includes(search) || masjid.address.toLowerCase().includes(search)
         )
-      : mapped
+      : resolved
 
     if (params?.limit && params.limit > 0) {
       return filtered.slice(0, params.limit)
@@ -202,9 +281,10 @@ class ApiService {
   ): Promise<Masjid[]> {
     const masjids = await this.getMasjids()
     return masjids
+      .filter((masjid) => typeof masjid.latitude === 'number' && typeof masjid.longitude === 'number')
       .map((masjid) => ({
         ...masjid,
-        distance: toKm(latitude, longitude, masjid.latitude, masjid.longitude),
+        distance: toKm(latitude, longitude, masjid.latitude as number, masjid.longitude as number),
       }))
       .filter((masjid) => (masjid.distance || 0) <= radiusKm)
       .sort((a, b) => (a.distance || 0) - (b.distance || 0))
@@ -289,6 +369,22 @@ class ApiService {
     }
   }
 
+  async createMasjid(data: CreateMasjidRequest): Promise<void> {
+    const response = await this.api.post<{ success: boolean; message?: string }>('/api/masjid_create.php', data)
+    if (!response.data.success) {
+      throw new Error(response.data.message || 'Failed to create masjid')
+    }
+  }
+
+  async importAddresses(file: File): Promise<ImportAddressesResponse> {
+    const form = new FormData()
+    form.append('file', file)
+    const response = await this.api.post<ImportAddressesResponse>('/api/address_import.php', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+    return response.data
+  }
+
   async getMissingCoordinates(): Promise<MissingCoordinatesRecord[]> {
     const response = await this.api.get<{ success: boolean; data: MissingCoordinatesRecord[] }>('/api/missing_coordinates.php')
     return response.data.data || []
@@ -301,9 +397,230 @@ class ApiService {
     }
   }
 
+  async getGeocodeReviewList(createdBy?: number): Promise<PendingGeocodeRecord[]> {
+    try {
+      const response = await this.api.get<{ success: boolean; data: PendingGeocodeRecord[]; message?: string }>('/api/geocode_review.php', {
+        params: createdBy ? { createdBy } : undefined,
+      })
+      if (!response.data.success) {
+        throw new Error(response.data.message || 'Failed to load geocode review list')
+      }
+      return response.data.data || []
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.status === 404) {
+        return []
+      }
+      throw error
+    }
+  }
+
+  async approveGeocodedAddress(id: number): Promise<void> {
+    const response = await this.api.post<{ success: boolean; message?: string }>('/api/geocode_review.php', { id })
+    if (!response.data.success) {
+      throw new Error(response.data.message || 'Failed to approve address')
+    }
+  }
+
+  async getMasjidReviewList(createdBy?: number): Promise<PendingMasjidRecord[]> {
+    const response = await this.api.get<{ success: boolean; data: PendingMasjidRecord[]; message?: string }>('/api/masjid_review.php', {
+      params: createdBy ? { createdBy } : undefined,
+    })
+    if (!response.data.success) {
+      throw new Error(response.data.message || 'Failed to load masjid review list')
+    }
+    return response.data.data || []
+  }
+
+  async approveMasjid(id: number): Promise<void> {
+    const response = await this.api.post<{ success: boolean; message?: string }>('/api/masjid_review.php', { id })
+    if (!response.data.success) {
+      throw new Error(response.data.message || 'Failed to approve masjid')
+    }
+  }
+
+  async geocodeAddress(address: string): Promise<{ lat: number; lng: number }> {
+    try {
+      const response = await this.api.get<{ success: boolean; lat?: number; lng?: number; message?: string }>(
+        '/api/geocode.php',
+        { params: { address } }
+      )
+      if (!response.data.success || response.data.lat === undefined || response.data.lng === undefined) {
+        throw new Error(response.data.message || 'No coordinates found')
+      }
+      return { lat: response.data.lat, lng: response.data.lng }
+    } catch (error) {
+      // Local dev can run before geocode.php is uploaded to GoDaddy.
+      // Fall back to direct provider calls through Vite proxy routes.
+      if (import.meta.env.DEV) {
+        const viaProxy = await this.geocodeAddressViaDevProxy(address)
+        if (viaProxy) return viaProxy
+      }
+      throw error
+    }
+  }
+
+  async reverseGeocode(lat: number, lng: number): Promise<{ houseNo: string; streetName: string; city: string; state: string; zip: string }> {
+    try {
+      const response = await this.api.get<{
+        success: boolean
+        houseNo?: string
+        streetName?: string
+        city?: string
+        state?: string
+        zip?: string
+        message?: string
+      }>('/api/reverse_geocode.php', {
+        params: { lat, lng },
+      })
+
+      if (!response.data.success) {
+        throw new Error(response.data.message || 'Reverse geocoding failed')
+      }
+
+      return {
+        houseNo: (response.data.houseNo || '').trim(),
+        streetName: (response.data.streetName || '').trim(),
+        city: (response.data.city || '').trim(),
+        state: (response.data.state || '').trim(),
+        zip: (response.data.zip || '').trim(),
+      }
+    } catch (error) {
+      if (import.meta.env.DEV) {
+        const fallback = await this.reverseGeocodeViaDevProxy(lat, lng)
+        if (fallback) return fallback
+      }
+      throw error
+    }
+  }
+
+  private async geocodeAddressViaDevProxy(address: string): Promise<{ lat: number; lng: number } | null> {
+    try {
+      const censusResponse = await axios.get<{
+        result?: { addressMatches?: Array<{ coordinates?: { x?: number; y?: number } }> }
+      }>('/census/geocoder/locations/onelineaddress', {
+        params: {
+          address,
+          benchmark: 'Public_AR_Current',
+          format: 'json',
+        },
+      })
+
+      const match = censusResponse.data?.result?.addressMatches?.[0]?.coordinates
+      if (match && typeof match.y === 'number' && typeof match.x === 'number') {
+        return { lat: match.y, lng: match.x }
+      }
+    } catch {
+      // Continue to Nominatim fallback.
+    }
+
+    try {
+      const nominatimResponse = await axios.get<Array<{ lat: string; lon: string }>>('/nominatim/search', {
+        params: {
+          format: 'json',
+          limit: 1,
+          q: address,
+        },
+        headers: {
+          Accept: 'application/json',
+        },
+      })
+
+      const first = nominatimResponse.data?.[0]
+      if (!first) return null
+
+      const lat = Number(first.lat)
+      const lng = Number(first.lon)
+      if (Number.isNaN(lat) || Number.isNaN(lng)) return null
+
+      return { lat, lng }
+    } catch {
+      return null
+    }
+  }
+
+  private async reverseGeocodeViaDevProxy(lat: number, lng: number): Promise<{ houseNo: string; streetName: string; city: string; state: string; zip: string } | null> {
+    try {
+      const response = await axios.get<{
+        address?: {
+          house_number?: string
+          road?: string
+          city?: string
+          town?: string
+          village?: string
+          hamlet?: string
+          state?: string
+          postcode?: string
+        }
+      }>('/nominatim/reverse', {
+        params: {
+          format: 'json',
+          addressdetails: 1,
+          lat,
+          lon: lng,
+        },
+        headers: { Accept: 'application/json' },
+      })
+
+      const address = response.data?.address
+      if (!address) return null
+
+      return {
+        houseNo: (address.house_number || '').trim(),
+        streetName: (address.road || '').trim(),
+        city: (address.city || address.town || address.village || address.hamlet || '').trim(),
+        state: (address.state || '').trim(),
+        zip: (address.postcode || '').trim(),
+      }
+    } catch {
+      return null
+    }
+  }
+
   // Prayer times
   async getPrayerTimes(_masjidId: number): Promise<PrayerTime[]> {
     return []
+  }
+
+  // ---------------------------------------------------------------
+  // Subscription / Billing
+  // ---------------------------------------------------------------
+  async getSubscription(): Promise<SubscriptionInfo | null> {
+    try {
+      const response = await this.api.get(`${API_BASE_URL}/api/subscription.php`)
+      return response.data?.data ?? null
+    } catch {
+      return null
+    }
+  }
+
+  async createCheckoutSession(): Promise<string | null> {
+    const response = await this.api.post(`${API_BASE_URL}/api/subscription.php`, { action: 'create_checkout' })
+    return response.data?.checkoutUrl ?? null
+  }
+
+  async createBillingPortalSession(): Promise<string | null> {
+    const response = await this.api.post(`${API_BASE_URL}/api/subscription.php`, { action: 'billing_portal' })
+    return response.data?.portalUrl ?? null
+  }
+
+  // ---------------------------------------------------------------
+  // Org Users (team management)
+  // ---------------------------------------------------------------
+  async getOrgUsers(): Promise<OrgUsersResponse | null> {
+    try {
+      const response = await this.api.get(`${API_BASE_URL}/api/org_users.php`)
+      return response.data?.data ?? null
+    } catch {
+      return null
+    }
+  }
+
+  async addOrgUser(userId: number, orgRole: 'editor' | 'viewer'): Promise<void> {
+    await this.api.post(`${API_BASE_URL}/api/org_users.php`, { action: 'add_user', user_id: userId, org_role: orgRole })
+  }
+
+  async removeOrgUser(userId: number): Promise<void> {
+    await this.api.post(`${API_BASE_URL}/api/org_users.php`, { action: 'remove_user', user_id: userId })
   }
 }
 

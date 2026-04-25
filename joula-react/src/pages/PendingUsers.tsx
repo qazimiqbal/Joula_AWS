@@ -8,7 +8,9 @@ import {
   Table,
   TableBody,
   TableCell,
+  TableContainer,
   TableHead,
+  TablePagination,
   TableRow,
   Typography,
 } from '@mui/material'
@@ -22,6 +24,8 @@ const PendingUsers: React.FC = () => {
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [pendingUsers, setPendingUsers] = useState<PendingUser[]>([])
+  const [page, setPage] = useState(0)
+  const [rowsPerPage, setRowsPerPage] = useState(10)
 
   const permissionLevel = user?.permissionLevel ?? 0
 
@@ -32,6 +36,7 @@ const PendingUsers: React.FC = () => {
     try {
       const data = await apiService.getPendingUsers(user.id)
       setPendingUsers(data)
+      setPage(0)
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to load pending users')
     } finally {
@@ -57,6 +62,17 @@ const PendingUsers: React.FC = () => {
     }
   }
 
+  const pagedPendingUsers = pendingUsers.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage)
+
+  const handleChangePage = (_event: unknown, newPage: number) => {
+    setPage(newPage)
+  }
+
+  const handleChangeRowsPerPage = (event: React.ChangeEvent<HTMLInputElement>) => {
+    setRowsPerPage(parseInt(event.target.value, 10))
+    setPage(0)
+  }
+
   if (permissionLevel < 3) {
     return <Alert severity="error">You do not have permission to access this page.</Alert>
   }
@@ -78,46 +94,59 @@ const PendingUsers: React.FC = () => {
         ) : pendingUsers.length === 0 ? (
           <Typography variant="body1">No pending users found.</Typography>
         ) : (
-          <Table size="small">
-            <TableHead>
-              <TableRow>
-                <TableCell>Username</TableCell>
-                <TableCell>Email</TableCell>
-                <TableCell>Phone</TableCell>
-                <TableCell>Created</TableCell>
-                <TableCell align="right">Actions</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {pendingUsers.map((pendingUser) => (
-                <TableRow key={pendingUser.id}>
-                  <TableCell>{pendingUser.username}</TableCell>
-                  <TableCell>{pendingUser.email}</TableCell>
-                  <TableCell>{pendingUser.phone}</TableCell>
-                  <TableCell>{pendingUser.createdAt}</TableCell>
-                  <TableCell align="right">
-                    <Button
-                      size="small"
-                      variant="contained"
-                      color="success"
-                      sx={{ mr: 1 }}
-                      onClick={() => handleReview(pendingUser.id, 'approve')}
-                    >
-                      Approve
-                    </Button>
-                    <Button
-                      size="small"
-                      variant="outlined"
-                      color="error"
-                      onClick={() => handleReview(pendingUser.id, 'disapprove')}
-                    >
-                      Disapprove
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+          <>
+            <TableContainer sx={{ overflowX: 'auto' }}>
+              <Table size="small" sx={{ minWidth: 760 }}>
+                <TableHead>
+                  <TableRow>
+                    <TableCell sx={{ whiteSpace: 'nowrap' }}>Username</TableCell>
+                    <TableCell sx={{ whiteSpace: 'nowrap' }}>Email</TableCell>
+                    <TableCell sx={{ whiteSpace: 'nowrap' }}>Phone</TableCell>
+                    <TableCell sx={{ whiteSpace: 'nowrap' }}>Created</TableCell>
+                    <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>Actions</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {pagedPendingUsers.map((pendingUser) => (
+                    <TableRow key={pendingUser.id}>
+                      <TableCell sx={{ whiteSpace: 'nowrap' }}>{pendingUser.username}</TableCell>
+                      <TableCell sx={{ whiteSpace: 'nowrap' }}>{pendingUser.email}</TableCell>
+                      <TableCell sx={{ whiteSpace: 'nowrap' }}>{pendingUser.phone}</TableCell>
+                      <TableCell sx={{ whiteSpace: 'nowrap' }}>{pendingUser.createdAt}</TableCell>
+                      <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
+                        <Button
+                          size="small"
+                          variant="text"
+                          color="success"
+                          sx={{ mr: 1 }}
+                          onClick={() => handleReview(pendingUser.id, 'approve')}
+                        >
+                          Approve
+                        </Button>
+                        <Button
+                          size="small"
+                          variant="text"
+                          color="error"
+                          onClick={() => handleReview(pendingUser.id, 'disapprove')}
+                        >
+                          Disapprove
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+            <TablePagination
+              component="div"
+              count={pendingUsers.length}
+              page={page}
+              onPageChange={handleChangePage}
+              rowsPerPage={rowsPerPage}
+              onRowsPerPageChange={handleChangeRowsPerPage}
+              rowsPerPageOptions={[5, 10, 25, 50]}
+            />
+          </>
         )}
       </Paper>
     </Box>

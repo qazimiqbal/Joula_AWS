@@ -183,7 +183,7 @@ See [Backend README](joula-backend/README.md) for full documentation.
 
 ### Create Database
 ```sql
-CREATE DATABASE joula;
+CREATE DATABASE Joula_AWS;
 ```
 
 ### Create Tables
@@ -204,7 +204,7 @@ PORT=5000
 DB_HOST=localhost
 DB_USER=root
 DB_PASSWORD=your_password
-DB_NAME=joula
+DB_NAME=Joula_AWS
 JWT_SECRET=your-secret-key-here
 FRONTEND_URL=http://localhost:3000
 ```
@@ -273,7 +273,7 @@ taskkill /PID <PID> /F
 ### Issue: "MySQL connection error"
 - Check MySQL is running
 - Verify credentials in `.env`
-- Ensure database exists: `CREATE DATABASE joula;`
+- Ensure database exists: `CREATE DATABASE Joula_AWS;`
 
 ### Issue: "CORS error"
 - Make sure backend is running at correct URL

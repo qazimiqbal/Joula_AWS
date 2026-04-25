@@ -46,3 +46,14 @@ code {
   border-radius: 4px;
   margin: 16px 0;
 }
+
+/* Transparent tooltip used for masjid map markers */
+.masjid-tooltip {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+}
+.masjid-tooltip::before {
+  display: none !important;
+}

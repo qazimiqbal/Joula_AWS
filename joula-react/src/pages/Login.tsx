@@ -251,10 +251,6 @@ const Login: React.FC = () => {
               </Button>
             </form>
           )}
-
-          <Typography variant="body2" align="center" sx={{ mt: 2 }}>
-            Demo credentials: admin@myjoula.com / password123
-          </Typography>
         </Paper>
       </Box>
     </Container>

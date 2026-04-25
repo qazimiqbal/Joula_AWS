@@ -10,7 +10,7 @@ export default defineConfig({
     proxy: {
       // Forward /api/* to the live server (new PHP endpoints)
       '/api': {
-        target: 'https://myjoula.com/mobile',
+        target: 'https://myjoula.com/Joula',
         changeOrigin: true,
         secure: true,
         headers: {
@@ -26,23 +26,21 @@ export default defineConfig({
           });
         },
       },
-      // Forward all /mobile/* requests to the live GoDaddy server
-      // This avoids CORS issues when developing locally
-      '/mobile': {
-        target: 'https://myjoula.com',
+      // US Census geocoder proxy for local development fallback
+      '/census': {
+        target: 'https://geocoding.geo.census.gov',
         changeOrigin: true,
         secure: true,
+        rewrite: (path) => path.replace(/^\/census/, ''),
+      },
+      // Nominatim fallback proxy for local development
+      '/nominatim': {
+        target: 'https://nominatim.openstreetmap.org',
+        changeOrigin: true,
+        secure: true,
+        rewrite: (path) => path.replace(/^\/nominatim/, ''),
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        },
-        configure: (proxy) => {
-          proxy.on('error', (err, _req, res) => {
-            console.warn('[proxy /mobile] error:', err.message);
-            if (res && !res.headersSent) {
-              (res as any).writeHead(502, { 'Content-Type': 'application/json' });
-              (res as any).end(JSON.stringify({ error: 'Proxy error', detail: err.message }));
-            }
-          });
+          'User-Agent': 'MyJoula/1.0',
         },
       }
     }
