@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Box,
@@ -15,11 +15,14 @@ import {
   LinearProgress,
   Divider,
   Chip,
+  MenuItem,
+  TextField,
 } from '@mui/material'
 import UploadFileIcon from '@mui/icons-material/UploadFile'
 import DownloadIcon from '@mui/icons-material/Download'
 import apiService from '@/services/api'
-import { ImportAddressesResponse } from '@/types'
+import { ImportAddressesResponse, Masjid } from '@/types'
+import { useAuth } from '@/context/AuthContext'
 
 const CSV_TEMPLATE_HEADERS = [
   'name',
@@ -91,13 +94,40 @@ function parseCsvPreview(file: File): Promise<{ headers: string[]; rows: Preview
 
 const AddressImport: React.FC = () => {
   const navigate = useNavigate()
+  const { user } = useAuth()
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [preview, setPreview] = useState<{ headers: string[]; rows: PreviewRow[] } | null>(null)
   const [loading, setLoading] = useState(false)
+  const [loadingMasjids, setLoadingMasjids] = useState(false)
+  const [ownedMasjids, setOwnedMasjids] = useState<Masjid[]>([])
+  const [selectedMasjid, setSelectedMasjid] = useState('')
   const [result, setResult] = useState<ImportAddressesResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!user?.id) {
+      setOwnedMasjids([])
+      setSelectedMasjid('')
+      return
+    }
+
+    setLoadingMasjids(true)
+    apiService
+      .getMasjids({ orgScoped: true })
+      .then((masjids) => {
+        setOwnedMasjids(masjids)
+        setSelectedMasjid(masjids[0]?.name || '')
+      })
+      .catch(() => {
+        setOwnedMasjids([])
+        setSelectedMasjid('')
+      })
+      .finally(() => {
+        setLoadingMasjids(false)
+      })
+  }, [user?.id])
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0] ?? null
@@ -120,11 +150,15 @@ const AddressImport: React.FC = () => {
 
   const handleUpload = async () => {
     if (!selectedFile) return
+    if (!selectedMasjid) {
+      setError('Select a masjid before importing addresses.')
+      return
+    }
     setLoading(true)
     setError(null)
     setResult(null)
     try {
-      const res = await apiService.importAddresses(selectedFile)
+      const res = await apiService.importAddresses(selectedFile, selectedMasjid)
       setResult(res)
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Upload failed'
@@ -155,6 +189,30 @@ const AddressImport: React.FC = () => {
         you have uploaded.
       </Typography>
 
+      {!loadingMasjids && ownedMasjids.length === 0 && (
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          Add a masjid first. Imported addresses must be associated with one of your approved masjids.
+        </Alert>
+      )}
+
+      <Box sx={{ mb: 2 }}>
+        <TextField
+          fullWidth
+          select
+          label="Masjid"
+          value={selectedMasjid}
+          onChange={(e) => setSelectedMasjid(e.target.value)}
+          disabled={loadingMasjids || ownedMasjids.length === 0 || loading}
+          helperText={loadingMasjids ? 'Loading your approved masjids...' : 'Imported addresses will be attached to this masjid'}
+        >
+          {ownedMasjids.map((masjid) => (
+            <MenuItem key={masjid.id} value={masjid.name}>
+              {masjid.name}
+            </MenuItem>
+          ))}
+        </TextField>
+      </Box>
+
       {/* Actions bar */}
       <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', mb: 3 }}>
         <Button
@@ -170,6 +228,7 @@ const AddressImport: React.FC = () => {
           startIcon={<UploadFileIcon />}
           onClick={handleChooseFile}
           size="small"
+          disabled={loadingMasjids || ownedMasjids.length === 0 || loading}
         >
           {selectedFile ? 'Change File' : 'Choose CSV File'}
         </Button>
@@ -179,7 +238,7 @@ const AddressImport: React.FC = () => {
             color="success"
             size="small"
             onClick={handleUpload}
-            disabled={!!error && !preview}
+            disabled={(!!error && !preview) || !selectedMasjid}
           >
             Upload &amp; Import
           </Button>
@@ -300,6 +359,14 @@ const AddressImport: React.FC = () => {
             Required columns: name, houseNo, streetName, city, state, zip, locality
           </Typography>
         </Paper>
+      )}
+
+      {!loadingMasjids && ownedMasjids.length === 0 && (
+        <Box sx={{ mt: 2 }}>
+          <Button variant="outlined" onClick={() => navigate('/masjids/new')}>
+            Add New Masjid
+          </Button>
+        </Box>
       )}
     </Box>
   )

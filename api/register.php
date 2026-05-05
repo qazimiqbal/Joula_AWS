@@ -250,8 +250,17 @@ if ($usernameExists || $passwordExists || $emailExists) {
     ));
 }
 
-// New sign-ups become their own org admin when org_role exists, active immediately.
-$permissions = 'Administrator';
+// New sign-ups default to Admin (3). The very first account becomes Super Admin (4).
+$permissions = '3';
+$resultUserCount = mysqli_query($con, "SELECT COUNT(*) FROM `$loginTable`");
+$rowUserCount = $resultUserCount ? mysqli_fetch_row($resultUserCount) : null;
+$userCount = $rowUserCount ? intval($rowUserCount[0]) : 0;
+if ($resultUserCount) {
+    mysqli_free_result($resultUserCount);
+}
+if ($userCount === 0) {
+    $permissions = '4';
+}
 $status = 'true';
 $passChange = 'No';
 $masjid = '';
@@ -307,7 +316,11 @@ if ($hasStatus) {
 }
 if ($hasOrgRole) {
     $insertColumns[] = 'org_role';
-    $insertValuesSql[] = "'org_admin'";
+    if ($userCount === 0) {
+        $insertValuesSql[] = "'org_admin'";
+    } else {
+        $insertValuesSql[] = "'admin'";
+    }
 }
 
 $sqlInsert = "INSERT INTO `$loginTable` (" . implode(', ', $insertColumns) . ") VALUES (" . implode(', ', $insertValuesSql) . ")";

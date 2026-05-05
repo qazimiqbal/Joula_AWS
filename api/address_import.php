@@ -17,6 +17,48 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 
 include('db.php');
 
+function permission_to_level($permissionRaw) {
+        $value = trim((string)$permissionRaw);
+        if ($value === '4' || strcasecmp($value, 'Super Administrator') === 0) return 4;
+        if ($value === '3' || strcasecmp($value, 'Administrator') === 0 || strcasecmp($value, 'Admin') === 0) return 3;
+        if ($value === '2' || strcasecmp($value, 'Editor') === 0) return 2;
+        if ($value === '1' || strcasecmp($value, 'Viewer') === 0) return 1;
+        if (is_numeric($value)) return intval($value);
+        return 0;
+}
+
+function resolve_effective_owner_id($con, $userId, $orgId, $permissionLevel) {
+        if ($permissionLevel >= 3 || $orgId <= 0) {
+                return intval($userId);
+        }
+
+        $ownerStmt = mysqli_prepare(
+                $con,
+                "SELECT id
+                 FROM Login_user_AWS
+                 WHERE org_id = ?
+                     AND status = 'true'
+                     AND (org_role = 'org_admin' OR org_role = 'admin' OR Permissions = '3' OR Permissions = '4')
+                 ORDER BY
+                     CASE
+                         WHEN org_role = 'org_admin' THEN 0
+                         WHEN org_role = 'admin' THEN 1
+                         ELSE 2
+                     END,
+                     id ASC
+                 LIMIT 1"
+        );
+        if (!$ownerStmt) return intval($userId);
+        mysqli_stmt_bind_param($ownerStmt, 'i', $orgId);
+        mysqli_stmt_execute($ownerStmt);
+        $ownerId = null;
+        mysqli_stmt_bind_result($ownerStmt, $ownerId);
+        $found = mysqli_stmt_fetch($ownerStmt);
+        mysqli_stmt_close($ownerStmt);
+
+        return ($found && $ownerId) ? intval($ownerId) : intval($userId);
+}
+
 // ---------------------------------------------------------------
 // Auth — any authenticated user may import; we record who they are
 // ---------------------------------------------------------------
@@ -26,18 +68,19 @@ function get_auth_user_for_import($con) {
     $token = substr($authHeader, 7);
 
     $stmt = mysqli_prepare($con,
-        "SELECT id, Permissions FROM Login_user_AWS
+        "SELECT id, Permissions, org_id FROM Login_user_AWS
          WHERE auth_token = ? AND status = 'true' LIMIT 1");
     if (!$stmt) return null;
     mysqli_stmt_bind_param($stmt, 's', $token);
     mysqli_stmt_execute($stmt);
     $userId = null;
     $perms  = null;
-    mysqli_stmt_bind_result($stmt, $userId, $perms);
+    $orgId  = null;
+    mysqli_stmt_bind_result($stmt, $userId, $perms, $orgId);
     $found = mysqli_stmt_fetch($stmt);
     mysqli_stmt_close($stmt);
     if (!$found || !$userId) return null;
-    return ['id' => intval($userId), 'permissions' => (string)$perms];
+    return ['id' => intval($userId), 'permissions' => (string)$perms, 'org_id' => intval($orgId)];
 }
 
 $authUser = get_auth_user_for_import($con);
@@ -46,7 +89,39 @@ if (!$authUser) {
     echo json_encode(['success' => false, 'message' => 'Unauthorized']);
     exit;
 }
-$uploadedBy = $authUser['id'];
+$uploadedBy = resolve_effective_owner_id($con, intval($authUser['id']), intval($authUser['org_id']), permission_to_level($authUser['permissions']));
+$uploadedByOrgId = $authUser['org_id'];
+$selectedMasjid = isset($_POST['masjid']) ? trim($_POST['masjid']) : '';
+
+if ($selectedMasjid === '') {
+    http_response_code(400);
+    echo json_encode(['success' => false, 'message' => 'Masjid is required']);
+    exit;
+}
+
+$masjidStmt = mysqli_prepare($con, 'SELECT m.ID
+    FROM Masjids_AWS m
+    INNER JOIN Login_user_AWS owner ON owner.id = m.Created_by
+    WHERE m.Name = ?
+      AND COALESCE(m.`Clear`, 1) = 1
+      AND (m.Created_by = ? OR (? > 0 AND owner.org_id = ?))
+    LIMIT 1');
+if (!$masjidStmt) {
+    http_response_code(500);
+    echo json_encode(['success' => false, 'message' => 'Failed to validate masjid: ' . mysqli_error($con)]);
+    exit;
+}
+mysqli_stmt_bind_param($masjidStmt, 'siii', $selectedMasjid, $uploadedBy, $uploadedByOrgId, $uploadedByOrgId);
+mysqli_stmt_execute($masjidStmt);
+mysqli_stmt_bind_result($masjidStmt, $masjidId);
+$hasApprovedMasjid = mysqli_stmt_fetch($masjidStmt);
+mysqli_stmt_close($masjidStmt);
+
+if (!$hasApprovedMasjid) {
+    http_response_code(400);
+    echo json_encode(['success' => false, 'message' => 'Select one of your approved masjids before importing addresses']);
+    exit;
+}
 
 // ---------------------------------------------------------------
 // File validation
@@ -158,7 +233,7 @@ $defaultArea        = 'unclassified';
 $defaultStatus      = 'Muslim';
 $defaultClear       = 0;
 $defaultVerified    = 'N';
-$defaultMasjid      = '';
+$defaultMasjid      = $selectedMasjid;
 $defaultCoordinates = '';
 $todayDate          = date('Y-m-d');
 

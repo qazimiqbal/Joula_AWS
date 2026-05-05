@@ -8,7 +8,13 @@ import { useAuth } from '@/context/AuthContext'
  * Editors and viewers are blocked too — only org admin can fix billing.
  */
 const SubscriptionGuard: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { subscription } = useAuth()
+  const { user, subscription } = useAuth()
+  const permissionLevel = user?.permissionLevel ?? (user?.role === 'admin' ? 3 : 1)
+
+  // Super admins are not subscription-bound — always let through
+  if (permissionLevel >= 4) {
+    return <>{children}</>
+  }
 
   if (!subscription) {
     // No subscription data yet (legacy user or org not set up) — let through

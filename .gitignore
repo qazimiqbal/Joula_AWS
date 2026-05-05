@@ -20,10 +20,12 @@
 .vscode/
 **/.vscode/
 **/sftp*.json
+.vscode/sftp.json
 **/.env
 **/.env.*
 connection.php.ini
 connection2.php.ini
+api/db.php
 
 # Build/runtime artifacts
 **/node_modules/

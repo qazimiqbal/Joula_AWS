@@ -135,7 +135,7 @@ const GeocodeReview: React.FC = () => {
     setPage(0)
   }
 
-  if (permissionLevel < 3) {
+  if (permissionLevel < 4) {
     return <Alert severity="error">You do not have permission to access this page.</Alert>
   }
 

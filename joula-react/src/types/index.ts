@@ -6,7 +6,7 @@ export interface User {
   phone?: string
   role: 'user' | 'admin'
   permissionLevel?: number
-  orgRole?: 'org_admin' | 'editor' | 'viewer'
+  orgRole?: 'org_admin' | 'admin' | 'editor' | 'viewer'
   createdAt: string
 }
 
@@ -36,8 +36,8 @@ export interface AddressRecord {
   id: number
   name: string
   address: string
-  latitude: number
-  longitude: number
+  latitude?: number | null
+  longitude?: number | null
   city?: string
   state?: string
   locality?: string
@@ -93,7 +93,7 @@ export type PlanStatus = 'trial' | 'active' | 'past_due' | 'cancelled' | 'expire
 export interface SubscriptionInfo {
   orgId: number
   orgName?: string
-  orgRole: 'org_admin' | 'editor' | 'viewer'
+  orgRole: 'org_admin' | 'admin' | 'editor' | 'viewer'
   planStatus: PlanStatus
   trialEndsAt: string
   trialDaysLeft: number
@@ -109,7 +109,7 @@ export interface OrgUser {
   username: string
   email: string
   phone: string
-  orgRole: 'org_admin' | 'editor' | 'viewer'
+  orgRole: 'org_admin' | 'admin' | 'editor' | 'viewer'
   status: string
 }
 
@@ -126,6 +126,14 @@ export interface RegisterRequest {
   password: string
   email: string
   phone: string
+}
+
+export interface CreateTeamUserRequest {
+  username: string
+  password: string
+  email: string
+  phone: string
+  role: 'editor' | 'viewer'
 }
 
 export interface PendingUser {
@@ -175,6 +183,7 @@ export interface PendingMasjidRecord {
   zip: string
   createdBy?: number | null
   submittedBy?: string
+  Coordinates?: string
 }
 
 export interface CreateMasjidRequest {
@@ -185,6 +194,8 @@ export interface CreateMasjidRequest {
   city: string
   state: string
   zip: string
+  latitude?: number
+  longitude?: number
 }
 
 export interface CreateAddressRequest {

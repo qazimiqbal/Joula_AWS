@@ -15,6 +15,16 @@ function respond($statusCode, $payload) {
 include('db.php');
 mysqli_select_db($con, $db);
 
+function has_column($con, $table, $column) {
+    $tableSafe = mysqli_real_escape_string($con, $table);
+    $columnSafe = mysqli_real_escape_string($con, $column);
+    $result = mysqli_query($con, "SHOW COLUMNS FROM `{$tableSafe}` LIKE '{$columnSafe}'");
+    if (!$result) return false;
+    $exists = mysqli_num_rows($result) > 0;
+    mysqli_free_result($result);
+    return $exists;
+}
+
 // ---------------------------------------------------------------
 // Auth helper
 // ---------------------------------------------------------------
@@ -44,44 +54,65 @@ function get_authenticated_user($con) {
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     $me = get_authenticated_user($con);
     if (!$me) respond(401, ['success' => false, 'message' => 'Unauthorized']);
-    if ($me['org_role'] !== 'org_admin') {
-        respond(403, ['success' => false, 'message' => 'Only org admins can view org users']);
+    if ($me['org_role'] !== 'org_admin' && $me['org_role'] !== 'admin') {
+        respond(403, ['success' => false, 'message' => 'Only admins can view org users']);
     }
 
+    $hasPhone = has_column($con, 'Login_user_AWS', 'phone');
+    $selectPhone = $hasPhone ? 'phone' : "'' AS phone";
+
     $stmt = mysqli_prepare($con,
-        "SELECT id, username, email, phone, org_role, status
+        "SELECT id, username, email, {$selectPhone}, org_role, status
          FROM Login_user_AWS
          WHERE org_id = ?
          ORDER BY org_role, username");
+    if (!$stmt) {
+        respond(500, ['success' => false, 'message' => 'Failed to load org users', 'error' => mysqli_error($con)]);
+    }
     mysqli_stmt_bind_param($stmt, 'i', $me['org_id']);
     mysqli_stmt_execute($stmt);
-    $res = mysqli_stmt_get_result($stmt);
     $users = [];
-    while ($row = mysqli_fetch_assoc($res)) {
+    mysqli_stmt_bind_result($stmt, $uid, $uname, $uemail, $uphone, $uorgRole, $ustatus);
+    while (mysqli_stmt_fetch($stmt)) {
         $users[] = [
-            'id'       => intval($row['id']),
-            'username' => $row['username'],
-            'email'    => $row['email'],
-            'phone'    => $row['phone'] ?? '',
-            'orgRole'  => $row['org_role'],
-            'status'   => $row['status'],
+            'id'       => intval($uid),
+            'username' => $uname,
+            'email'    => $uemail,
+            'phone'    => $uphone ?? '',
+            'orgRole'  => $uorgRole,
+            'status'   => $ustatus,
         ];
     }
     mysqli_stmt_close($stmt);
 
     // Count editors and viewers
-    $editors = count(array_filter($users, fn($u) => $u['orgRole'] === 'editor'));
-    $viewers  = count(array_filter($users, fn($u) => $u['orgRole'] === 'viewer'));
+    $editors = 0;
+    $viewers = 0;
+    foreach ($users as $u) {
+        if (isset($u['orgRole']) && $u['orgRole'] === 'editor') {
+            $editors++;
+        }
+        if (isset($u['orgRole']) && $u['orgRole'] === 'viewer') {
+            $viewers++;
+        }
+    }
 
     // Get seat limits from org
     $limStmt = mysqli_prepare($con,
         "SELECT max_editors, max_viewers FROM organizations WHERE id = ? LIMIT 1");
-    mysqli_stmt_bind_param($limStmt, 'i', $me['org_id']);
-    mysqli_stmt_execute($limStmt);
     $maxEditors = $maxViewers = null;
-    mysqli_stmt_bind_result($limStmt, $maxEditors, $maxViewers);
-    mysqli_stmt_fetch($limStmt);
-    mysqli_stmt_close($limStmt);
+    if ($limStmt) {
+        mysqli_stmt_bind_param($limStmt, 'i', $me['org_id']);
+        mysqli_stmt_execute($limStmt);
+        mysqli_stmt_bind_result($limStmt, $maxEditors, $maxViewers);
+        mysqli_stmt_fetch($limStmt);
+        mysqli_stmt_close($limStmt);
+    }
+
+    $maxEditors = intval($maxEditors);
+    $maxViewers = intval($maxViewers);
+    if ($maxEditors <= 0) $maxEditors = 5;
+    if ($maxViewers <= 0) $maxViewers = 10;
 
     respond(200, [
         'success' => true,
@@ -89,8 +120,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
             'users'       => $users,
             'editorCount' => $editors,
             'viewerCount' => $viewers,
-            'maxEditors'  => intval($maxEditors),
-            'maxViewers'  => intval($maxViewers),
+            'maxEditors'  => $maxEditors,
+            'maxViewers'  => $maxViewers,
         ]
     ]);
 }
@@ -98,8 +129,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $me = get_authenticated_user($con);
     if (!$me) respond(401, ['success' => false, 'message' => 'Unauthorized']);
-    if ($me['org_role'] !== 'org_admin') {
-        respond(403, ['success' => false, 'message' => 'Only org admins can manage users']);
+    if ($me['org_role'] !== 'org_admin' && $me['org_role'] !== 'admin') {
+        respond(403, ['success' => false, 'message' => 'Only admins can manage users']);
     }
 
     $rawInput = file_get_contents('php://input');
@@ -125,6 +156,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
              FROM Login_user_AWS
              WHERE org_id = ? AND org_role = ?
              GROUP BY org_role");
+        if (!$countStmt) {
+            respond(500, ['success' => false, 'message' => 'Failed to count existing team members', 'error' => mysqli_error($con)]);
+        }
         mysqli_stmt_bind_param($countStmt, 'is', $me['org_id'], $newRole);
         mysqli_stmt_execute($countStmt);
         $currentCount = 0;
@@ -134,15 +168,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         $limStmt = mysqli_prepare($con,
             "SELECT max_editors, max_viewers FROM organizations WHERE id = ? LIMIT 1");
-        mysqli_stmt_bind_param($limStmt, 'i', $me['org_id']);
-        mysqli_stmt_execute($limStmt);
         $maxE = $maxV = null;
-        mysqli_stmt_bind_result($limStmt, $maxE, $maxV);
-        mysqli_stmt_fetch($limStmt);
-        mysqli_stmt_close($limStmt);
+        if ($limStmt) {
+            mysqli_stmt_bind_param($limStmt, 'i', $me['org_id']);
+            mysqli_stmt_execute($limStmt);
+            mysqli_stmt_bind_result($limStmt, $maxE, $maxV);
+            mysqli_stmt_fetch($limStmt);
+            mysqli_stmt_close($limStmt);
+        }
 
-        $limit = ($newRole === 'editor') ? intval($maxE) : intval($maxV);
-        if ($action === 'add_user' && $currentCount >= $limit) {
+        $maxE = intval($maxE);
+        $maxV = intval($maxV);
+        if ($maxE <= 0) $maxE = 5;
+        if ($maxV <= 0) $maxV = 10;
+        $limit = ($newRole === 'editor') ? $maxE : $maxV;
+        if ($action === 'add_user' && $limit > 0 && $currentCount >= $limit) {
             respond(422, ['success' => false,
                 'message' => "Seat limit reached: your plan allows $limit {$newRole}s"]);
         }
@@ -152,8 +192,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             "UPDATE Login_user_AWS
              SET org_id = ?, org_role = ?, status = 'true', Permissions = ?
              WHERE id = ? LIMIT 1");
-        $perm = ($newRole === 'editor') ? 'Editor' : 'Viewer';
-        mysqli_stmt_bind_param($upStmt, 'isis', $me['org_id'], $newRole, $perm, $targetId);
+        if (!$upStmt) {
+            respond(500, ['success' => false, 'message' => 'Failed to update user role', 'error' => mysqli_error($con)]);
+        }
+        // Keep permission storage consistent as numeric levels.
+        $perm = ($newRole === 'editor') ? '2' : '1';
+        mysqli_stmt_bind_param($upStmt, 'issi', $me['org_id'], $newRole, $perm, $targetId);
         mysqli_stmt_execute($upStmt);
         mysqli_stmt_close($upStmt);
 
@@ -172,8 +216,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         $rmStmt = mysqli_prepare($con,
             "UPDATE Login_user_AWS
-             SET org_id = NULL, org_role = 'viewer', status = 'false'
+             SET org_id = NULL, org_role = 'viewer', status = 'false', Permissions = '1'
              WHERE id = ? AND org_id = ? LIMIT 1");
+        if (!$rmStmt) {
+            respond(500, ['success' => false, 'message' => 'Failed to remove user', 'error' => mysqli_error($con)]);
+        }
         mysqli_stmt_bind_param($rmStmt, 'ii', $targetId, $me['org_id']);
         mysqli_stmt_execute($rmStmt);
         $affected = mysqli_stmt_affected_rows($rmStmt);

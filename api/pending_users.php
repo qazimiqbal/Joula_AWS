@@ -14,9 +14,11 @@ function respond($statusCode, $payload) {
 
 function permission_to_level($permissionRaw) {
     $value = trim((string)$permissionRaw);
-    if ($value === '3' || strcasecmp($value, 'Super Administrator') === 0) return 3;
-    if ($value === '2' || strcasecmp($value, 'Administrator') === 0) return 2;
-    if ($value === '1' || strcasecmp($value, 'Editor') === 0) return 1;
+    if ($value === '4' || strcasecmp($value, 'Super Administrator') === 0) return 4;
+    if ($value === '3' || strcasecmp($value, 'Administrator') === 0 || strcasecmp($value, 'Admin') === 0) return 3;
+    if ($value === '2' || strcasecmp($value, 'Editor') === 0) return 2;
+    if ($value === '1' || strcasecmp($value, 'Viewer') === 0) return 1;
+    if (is_numeric($value)) return intval($value);
     return 0;
 }
 
@@ -52,7 +54,7 @@ if (!$hasRequester) {
     respond(404, array('success' => false, 'message' => 'Requester not found'));
 }
 
-if (permission_to_level($requesterPermissionsRaw) < 3) {
+if (permission_to_level($requesterPermissionsRaw) < 4) {
     respond(403, array('success' => false, 'message' => 'Only Super Administrators can perform this action'));
 }
 

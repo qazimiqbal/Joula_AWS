@@ -9,15 +9,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 include('db.php');
 mysqli_select_db($con, $db);
 
+
 $state = isset($_GET['state']) ? trim($_GET['state']) : '';
 $locality = isset($_GET['locality']) ? trim($_GET['locality']) : '';
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
+$masjidId = isset($_GET['masjidId']) ? intval($_GET['masjidId']) : 0;
+
+$params = array();
+$types = '';
 
 $sql = "SELECT ID, Name, City, Coordinates, H_No, St_Name, State, Zip, Locality, Last_Visit, Apt_No, Comments
         FROM Addresses_AWS
     WHERE Coordinates != '' AND Coordinates != ',' AND COALESCE(`Clear`, 1) = 1";
-$params = array();
-$types = '';
+
+if ($masjidId > 0) {
+    $sql .= " AND Masjid_id = ?";
+    $types .= 'i';
+    $params[] = $masjidId;
+}
 
 if ($state !== '') {
     $sql .= " AND TRIM(State) = ?";

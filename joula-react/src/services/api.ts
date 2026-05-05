@@ -1,5 +1,5 @@
 import axios, { AxiosInstance, AxiosError } from 'axios'
-import { ApiResponse, User, Masjid, AddressRecord, LoginRequest, AuthResponse, PrayerTime, RegisterRequest, PendingUser, CreateAddressRequest, MissingCoordinatesRecord, PendingGeocodeRecord, SubscriptionInfo, OrgUsersResponse, ImportAddressesResponse, CreateMasjidRequest, PendingMasjidRecord } from '@/types'
+import { ApiResponse, User, Masjid, AddressRecord, LoginRequest, AuthResponse, PrayerTime, RegisterRequest, PendingUser, CreateAddressRequest, MissingCoordinatesRecord, PendingGeocodeRecord, SubscriptionInfo, OrgUsersResponse, ImportAddressesResponse, CreateMasjidRequest, PendingMasjidRecord, CreateTeamUserRequest } from '@/types'
 
 const API_BASE_URL = import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? '' : '/Joula')
 
@@ -112,6 +112,27 @@ const mapLegacyMasjid = (item: LegacyMasjid): Masjid => {
 }
 
 class ApiService {
+  // Google Geocoding via backend proxy
+  async googleGeocodeAddress(address: string): Promise<{ lat: number; lng: number; raw?: any }> {
+    const response = await this.api.post<{ success: boolean; lat?: number; lng?: number; raw?: any; message?: string }>(
+      '/api/google_geocode.php',
+      { address }
+    )
+    // Debug: log the full response
+    // eslint-disable-next-line no-console
+    console.log('Google Geocode API response:', response);
+    if (response.data.success && typeof response.data.lat === 'number' && typeof response.data.lng === 'number') {
+      return { lat: response.data.lat, lng: response.data.lng, raw: response.data.raw }
+    }
+    throw new Error(response.data.message || 'Google geocoding failed')
+  }
+
+  async deleteMasjid(id: number): Promise<void> {
+    const response = await this.api.post<{ success: boolean; message?: string }>('/api/delete_masjid.php', { id })
+    if (!response.data.success) {
+      throw new Error(response.data.message || 'Failed to delete masjid')
+    }
+  }
   private api: AxiosInstance
 
   constructor() {
@@ -212,16 +233,20 @@ class ApiService {
   }
 
   // Masjid endpoints
-  async getMasjids(params?: { state?: string; locality?: string; search?: string; limit?: number; page?: number }): Promise<Masjid[]> {
+  async getMasjids(params?: { state?: string; locality?: string; search?: string; limit?: number; page?: number; createdBy?: number; orgScoped?: boolean; includeOwnPending?: boolean; mine?: boolean }): Promise<Masjid[]> {
     const response = await this.api.get<{ success: boolean; data: LegacyMasjid[] }>('/api/masjids.php', {
       params: {
         state: params?.state,
         locality: params?.locality,
         search: params?.search,
+        createdBy: params?.createdBy,
+        orgScoped: params?.orgScoped ? '1' : undefined,
+        includeOwnPending: params?.includeOwnPending ? '1' : undefined,
+        mine: params?.mine ? '1' : undefined,
       },
     })
 
-    const mapped = (response.data.data || []).map((item) => mapLegacyMasjid(item))
+    let mapped = (response.data.data || []).map((item) => mapLegacyMasjid(item))
 
     const resolved = await Promise.all(
       mapped.map(async (masjid) => {
@@ -264,6 +289,7 @@ class ApiService {
 
     return filtered
   }
+
 
   async getMasjid(id: number): Promise<Masjid> {
     const masjids = await this.getMasjids()
@@ -312,12 +338,14 @@ class ApiService {
     locality?: string
     search?: string
     limit?: number
+    masjidId?: number
   }): Promise<AddressRecord[]> {
     const response = await this.api.get<{ success: boolean; data: LegacyAddress[] }>('/api/addresses.php', {
       params: {
         state: params?.state,
         locality: params?.locality,
         search: params?.search,
+        masjidId: params?.masjidId,
       },
     })
 
@@ -339,12 +367,17 @@ class ApiService {
   ): Promise<AddressRecord[]> {
     const addresses = await this.getAddresses()
     return addresses
-      .map((address) => ({
-        ...address,
-        distance: toKm(latitude, longitude, address.latitude, address.longitude),
-      }))
-      .filter((address) => (address.distance || 0) <= radiusKm)
-      .sort((a, b) => (a.distance || 0) - (b.distance || 0))
+      .map((address) => {
+        if (typeof address.latitude === 'number' && typeof address.longitude === 'number') {
+          return {
+            ...address,
+            distance: toKm(latitude, longitude, address.latitude, address.longitude),
+          }
+        }
+        return address
+      })
+      .filter((address) => typeof address.distance === 'number' && (address.distance || 0) <= radiusKm)
+      .sort((a, b) => ((a.distance || 0) - (b.distance || 0)))
   }
 
   // Visit / Comments
@@ -370,15 +403,28 @@ class ApiService {
   }
 
   async createMasjid(data: CreateMasjidRequest): Promise<void> {
-    const response = await this.api.post<{ success: boolean; message?: string }>('/api/masjid_create.php', data)
-    if (!response.data.success) {
-      throw new Error(response.data.message || 'Failed to create masjid')
+    try {
+      const response = await this.api.post<{ success: boolean; message?: string; error?: string; debug?: { values?: unknown; query?: string } }>('/api/masjid_create.php', data)
+      if (!response.data.success) {
+        const detail = response.data.error ? `: ${response.data.error}` : ''
+        throw new Error((response.data.message || 'Failed to create masjid') + detail)
+      }
+    } catch (error) {
+      if (axios.isAxiosError(error)) {
+        const payload = error.response?.data as { message?: string; error?: string } | undefined
+        if (payload?.message || payload?.error) {
+          const detail = payload?.error ? `: ${payload.error}` : ''
+          throw new Error((payload?.message || 'Failed to create masjid') + detail)
+        }
+      }
+      throw error
     }
   }
 
-  async importAddresses(file: File): Promise<ImportAddressesResponse> {
+  async importAddresses(file: File, masjid: string): Promise<ImportAddressesResponse> {
     const form = new FormData()
     form.append('file', file)
+    form.append('masjid', masjid)
     const response = await this.api.post<ImportAddressesResponse>('/api/address_import.php', form, {
       headers: { 'Content-Type': 'multipart/form-data' },
     })
@@ -431,6 +477,14 @@ class ApiService {
     return response.data.data || []
   }
 
+  async getMyPendingMasjids(): Promise<PendingMasjidRecord[]> {
+    const response = await this.api.get<{ success: boolean; data: PendingMasjidRecord[]; message?: string }>('/api/my_pending_masjids.php')
+    if (!response.data.success) {
+      throw new Error(response.data.message || 'Failed to load pending masjids')
+    }
+    return response.data.data || []
+  }
+
   async approveMasjid(id: number): Promise<void> {
     const response = await this.api.post<{ success: boolean; message?: string }>('/api/masjid_review.php', { id })
     if (!response.data.success) {
@@ -438,25 +492,44 @@ class ApiService {
     }
   }
 
-  async geocodeAddress(address: string): Promise<{ lat: number; lng: number }> {
-    try {
-      const response = await this.api.get<{ success: boolean; lat?: number; lng?: number; message?: string }>(
-        '/api/geocode.php',
-        { params: { address } }
-      )
-      if (!response.data.success || response.data.lat === undefined || response.data.lng === undefined) {
-        throw new Error(response.data.message || 'No coordinates found')
-      }
-      return { lat: response.data.lat, lng: response.data.lng }
-    } catch (error) {
-      // Local dev can run before geocode.php is uploaded to GoDaddy.
-      // Fall back to direct provider calls through Vite proxy routes.
-      if (import.meta.env.DEV) {
-        const viaProxy = await this.geocodeAddressViaDevProxy(address)
-        if (viaProxy) return viaProxy
-      }
-      throw error
+  async adminGetUsers(): Promise<any[]> {
+    const response = await this.api.get<{ success: boolean; data: any[]; message?: string }>('/api/admin_users.php', {
+      params: { action: 'list' },
+    })
+    if (response.data.success) return response.data.data || []
+    throw new Error(response.data.message || 'Failed to fetch users')
+  }
+
+  async adminGetUserMasjids(userId: number): Promise<any[]> {
+    const response = await this.api.get<{ success: boolean; data: any[]; message?: string }>('/api/admin_users.php', {
+      params: { action: 'masjids', userId },
+    })
+    if (response.data.success) return response.data.data || []
+    throw new Error(response.data.message || 'Failed to fetch masjids')
+  }
+
+  async adminGetUserTeam(userId: number): Promise<any[]> {
+    const response = await this.api.get<{ success: boolean; data: any[]; message?: string }>('/api/admin_users.php', {
+      params: { action: 'team', userId },
+    })
+    if (response.data.success) return response.data.data || []
+    throw new Error(response.data.message || 'Failed to fetch team')
+  }
+
+  async adminUpdateUser(userId: number, data: { email: string; phone: string; password?: string }): Promise<void> {
+    const response = await this.api.post<{ success: boolean; message?: string }>('/api/admin_users.php', {
+      action: 'update_user',
+      userId,
+      ...data,
+    })
+    if (!response.data.success) {
+      throw new Error(response.data.message || 'Failed to update user')
     }
+  }
+
+  // Only use Google geocoding for addresses
+  async geocodeAddress(address: string): Promise<{ lat: number; lng: number }> {
+    return this.googleGeocodeAddress(address);
   }
 
   async reverseGeocode(lat: number, lng: number): Promise<{ houseNo: string; streetName: string; city: string; state: string; zip: string }> {
@@ -493,50 +566,6 @@ class ApiService {
     }
   }
 
-  private async geocodeAddressViaDevProxy(address: string): Promise<{ lat: number; lng: number } | null> {
-    try {
-      const censusResponse = await axios.get<{
-        result?: { addressMatches?: Array<{ coordinates?: { x?: number; y?: number } }> }
-      }>('/census/geocoder/locations/onelineaddress', {
-        params: {
-          address,
-          benchmark: 'Public_AR_Current',
-          format: 'json',
-        },
-      })
-
-      const match = censusResponse.data?.result?.addressMatches?.[0]?.coordinates
-      if (match && typeof match.y === 'number' && typeof match.x === 'number') {
-        return { lat: match.y, lng: match.x }
-      }
-    } catch {
-      // Continue to Nominatim fallback.
-    }
-
-    try {
-      const nominatimResponse = await axios.get<Array<{ lat: string; lon: string }>>('/nominatim/search', {
-        params: {
-          format: 'json',
-          limit: 1,
-          q: address,
-        },
-        headers: {
-          Accept: 'application/json',
-        },
-      })
-
-      const first = nominatimResponse.data?.[0]
-      if (!first) return null
-
-      const lat = Number(first.lat)
-      const lng = Number(first.lon)
-      if (Number.isNaN(lat) || Number.isNaN(lng)) return null
-
-      return { lat, lng }
-    } catch {
-      return null
-    }
-  }
 
   private async reverseGeocodeViaDevProxy(lat: number, lng: number): Promise<{ houseNo: string; streetName: string; city: string; state: string; zip: string } | null> {
     try {
@@ -586,7 +615,7 @@ class ApiService {
   // ---------------------------------------------------------------
   async getSubscription(): Promise<SubscriptionInfo | null> {
     try {
-      const response = await this.api.get(`${API_BASE_URL}/api/subscription.php`)
+      const response = await this.api.get('/api/subscription.php')
       return response.data?.data ?? null
     } catch {
       return null
@@ -594,12 +623,12 @@ class ApiService {
   }
 
   async createCheckoutSession(): Promise<string | null> {
-    const response = await this.api.post(`${API_BASE_URL}/api/subscription.php`, { action: 'create_checkout' })
+    const response = await this.api.post('/api/subscription.php', { action: 'create_checkout' })
     return response.data?.checkoutUrl ?? null
   }
 
   async createBillingPortalSession(): Promise<string | null> {
-    const response = await this.api.post(`${API_BASE_URL}/api/subscription.php`, { action: 'billing_portal' })
+    const response = await this.api.post('/api/subscription.php', { action: 'billing_portal' })
     return response.data?.portalUrl ?? null
   }
 
@@ -608,7 +637,7 @@ class ApiService {
   // ---------------------------------------------------------------
   async getOrgUsers(): Promise<OrgUsersResponse | null> {
     try {
-      const response = await this.api.get(`${API_BASE_URL}/api/org_users.php`)
+      const response = await this.api.get('/api/org_users.php')
       return response.data?.data ?? null
     } catch {
       return null
@@ -616,11 +645,28 @@ class ApiService {
   }
 
   async addOrgUser(userId: number, orgRole: 'editor' | 'viewer'): Promise<void> {
-    await this.api.post(`${API_BASE_URL}/api/org_users.php`, { action: 'add_user', user_id: userId, org_role: orgRole })
+    await this.api.post('/api/org_users.php', { action: 'add_user', user_id: userId, org_role: orgRole })
+  }
+
+  async setOrgUserRole(userId: number, orgRole: 'editor' | 'viewer'): Promise<void> {
+    await this.api.post('/api/org_users.php', { action: 'set_role', user_id: userId, org_role: orgRole })
   }
 
   async removeOrgUser(userId: number): Promise<void> {
-    await this.api.post(`${API_BASE_URL}/api/org_users.php`, { action: 'remove_user', user_id: userId })
+    await this.api.post('/api/org_users.php', { action: 'remove_user', user_id: userId })
+  }
+
+  async createTeamUser(data: CreateTeamUserRequest): Promise<void> {
+    const response = await this.api.post<{ success: boolean; message?: string }>('/api/create_team_user.php', {
+      username: data.username,
+      password: data.password,
+      email: data.email,
+      phone: data.phone,
+      orgRole: data.role,
+    })
+    if (!response.data.success) {
+      throw new Error(response.data.message || 'Failed to create team user')
+    }
   }
 }
 

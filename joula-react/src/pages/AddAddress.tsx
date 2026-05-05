@@ -7,6 +7,7 @@ import {
   CircularProgress,
   Divider,
   Grid,
+  MenuItem,
   Paper,
   Stack,
   TextField,
@@ -15,6 +16,8 @@ import {
 import UploadFileIcon from '@mui/icons-material/UploadFile'
 import DownloadIcon from '@mui/icons-material/Download'
 import apiService from '@services/api'
+import { useAuth } from '@/context/AuthContext'
+import { Masjid } from '@/types'
 
 const CSV_HEADERS = ['name','houseNo','aptNo','streetName','city','state','zip','locality','comments','lastVisit','halaqa']
 const CSV_SAMPLE   = ['John Smith','123','','Maple St','Atlanta','GA','30301','Eastside','','','' ]
@@ -34,10 +37,15 @@ const todayStr = () => new Date().toISOString().split('T')[0]
 
 const AddAddress: React.FC = () => {
   const navigate = useNavigate()
+  const { user } = useAuth()
+  const permissionLevel = user?.permissionLevel ?? (user?.role === 'admin' ? 3 : 1)
+  const isSuperAdmin = permissionLevel >= 4
   const [loading, setLoading] = useState(false)
   const [geocoding, setGeocoding] = useState(false)
   const [locating, setLocating] = useState(false)
   const [needsRegeocode, setNeedsRegeocode] = useState(false)
+  const [loadingMasjids, setLoadingMasjids] = useState(false)
+  const [ownedMasjids, setOwnedMasjids] = useState<Masjid[]>([])
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [form, setForm] = useState({
@@ -112,6 +120,30 @@ const AddAddress: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.houseNo, form.aptNo, form.streetName, form.city, form.state, form.zip])
 
+  useEffect(() => {
+    if (!user?.id) {
+      setOwnedMasjids([])
+      return
+    }
+
+    setLoadingMasjids(true)
+    apiService
+      .getMasjids(isSuperAdmin ? undefined : { orgScoped: true })
+      .then((masjids) => {
+        setOwnedMasjids(masjids)
+        setForm((prev) => ({
+          ...prev,
+          masjid: prev.masjid || masjids[0]?.name || '',
+        }))
+      })
+      .catch(() => {
+        setOwnedMasjids([])
+      })
+      .finally(() => {
+        setLoadingMasjids(false)
+      })
+  }, [isSuperAdmin, user?.id])
+
   const handleUseCurrentLocation = () => {
     setError('')
     if (!navigator.geolocation) {
@@ -178,6 +210,11 @@ const AddAddress: React.FC = () => {
 
     if (!hasFullAddress && !hasCoordinates) {
       setError('Provide full address fields, or use current location to capture coordinates.')
+      return
+    }
+
+    if (!form.masjid.trim()) {
+      setError('Select a masjid before creating an address.')
       return
     }
 
@@ -261,6 +298,12 @@ const AddAddress: React.FC = () => {
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
       {success && <Alert severity="success" sx={{ mb: 2 }}>{success}</Alert>}
 
+      {!loadingMasjids && !isSuperAdmin && ownedMasjids.length === 0 && (
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          Add a masjid first. Addresses can only be created after they are associated with one of your approved masjids.
+        </Alert>
+      )}
+
       <Paper elevation={1} sx={{ p: 3 }}>
         <form onSubmit={handleSubmit}>
           <Grid container spacing={2}>
@@ -289,7 +332,21 @@ const AddAddress: React.FC = () => {
               <TextField fullWidth label="Locality" value={form.locality} onChange={(e) => updateField('locality', e.target.value)} />
             </Grid>
             <Grid item xs={12} md={6}>
-              <TextField fullWidth label="Masjid" value={form.masjid} onChange={(e) => updateField('masjid', e.target.value)} />
+              <TextField
+                fullWidth
+                select
+                label="Masjid"
+                value={form.masjid}
+                onChange={(e) => updateField('masjid', e.target.value)}
+                disabled={loadingMasjids || (!isSuperAdmin && ownedMasjids.length === 0)}
+                helperText={loadingMasjids ? 'Loading your approved masjids...' : 'Select one of your approved masjids'}
+              >
+                {ownedMasjids.map((masjid) => (
+                  <MenuItem key={masjid.id} value={masjid.name}>
+                    {masjid.name}
+                  </MenuItem>
+                ))}
+              </TextField>
             </Grid>
             <Grid item xs={12} md={4}>
               <TextField fullWidth label="Last Visit" type="date" value={form.lastVisit} onChange={(e) => updateField('lastVisit', e.target.value)} InputLabelProps={{ shrink: true }} />
@@ -344,12 +401,17 @@ const AddAddress: React.FC = () => {
           </Grid>
 
           <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ mt: 3 }}>
-            <Button type="submit" variant="contained" disabled={loading}>
-              {loading ? <CircularProgress size={22} /> : 'Create Address'}
+            <Button type="submit" variant="contained" disabled={loading || loadingMasjids || (!isSuperAdmin && ownedMasjids.length === 0)}>
+              {loading || loadingMasjids ? <CircularProgress size={22} /> : 'Create Address'}
             </Button>
             <Button variant="outlined" onClick={() => navigate('/dashboard')} disabled={loading}>
               Back
             </Button>
+            {!isSuperAdmin && ownedMasjids.length === 0 && (
+              <Button variant="outlined" onClick={() => navigate('/masjids/new')} disabled={loading}>
+                Add New Masjid
+              </Button>
+            )}
           </Stack>
         </form>
       </Paper>

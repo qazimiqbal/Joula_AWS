@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react'
 import {
   Box, Typography, Table, TableHead, TableRow, TableCell,
   TableBody, TableContainer, Paper, Button, Chip, CircularProgress,
-  Alert, Divider, TablePagination
+  Alert, Divider, TablePagination, Stack
 } from '@mui/material'
 import PersonAddIcon from '@mui/icons-material/PersonAdd'
 import { useAuth } from '@/context/AuthContext'
@@ -20,7 +20,7 @@ const OrgUsersPage: React.FC = () => {
   const [data, setData] = useState<OrgUsersResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [actionError, setActionError] = useState<string | null>(null)
-  const [busyId, setBusyId] = useState<number | null>(null)
+  const [busyKey, setBusyKey] = useState<string | null>(null)
   const [page, setPage] = useState(0)
   const [rowsPerPage, setRowsPerPage] = useState(10)
 
@@ -36,7 +36,7 @@ const OrgUsersPage: React.FC = () => {
 
   const handleRemove = async (u: OrgUser) => {
     if (!confirm(`Remove ${u.username} from your organization?`)) return
-    setBusyId(u.id)
+    setBusyKey(`remove-${u.id}`)
     setActionError(null)
     try {
       await apiService.removeOrgUser(u.id)
@@ -45,11 +45,26 @@ const OrgUsersPage: React.FC = () => {
       const msg = e instanceof Error ? e.message : 'Error removing user'
       setActionError(msg)
     } finally {
-      setBusyId(null)
+      setBusyKey(null)
     }
   }
 
-  const isAdmin = user?.orgRole === 'org_admin'
+  const handleChangeRole = async (u: OrgUser, nextRole: 'editor' | 'viewer') => {
+    if (!confirm(`Change ${u.username} to ${nextRole}?`)) return
+    setBusyKey(`role-${u.id}`)
+    setActionError(null)
+    try {
+      await apiService.setOrgUserRole(u.id, nextRole)
+      await reload()
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Error updating role'
+      setActionError(msg)
+    } finally {
+      setBusyKey(null)
+    }
+  }
+
+  const isAdmin = user?.orgRole === 'org_admin' || user?.orgRole === 'admin' || (user?.permissionLevel ?? 0) >= 3
   const pagedUsers = data?.users.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage) ?? []
 
   const handleChangePage = (_event: unknown, newPage: number) => {
@@ -101,7 +116,11 @@ const OrgUsersPage: React.FC = () => {
               <TableBody>
                 {pagedUsers.map((u) => (
                   <TableRow key={u.id} hover>
-                    <TableCell sx={{ whiteSpace: 'nowrap' }}>{u.username}</TableCell>
+                    <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                      {isAdmin ? (
+                        <Button variant="text" onClick={() => window.location.href = `/org-users/${u.id}`}>{u.username}</Button>
+                      ) : u.username}
+                    </TableCell>
                     <TableCell sx={{ whiteSpace: 'nowrap' }}>{u.email}</TableCell>
                     <TableCell sx={{ whiteSpace: 'nowrap' }}>
                       <Chip
@@ -112,16 +131,38 @@ const OrgUsersPage: React.FC = () => {
                     </TableCell>
                     {isAdmin && (
                       <TableCell sx={{ whiteSpace: 'nowrap' }}>
-                        {u.orgRole !== 'org_admin' && (
-                          <Button
-                            variant="text"
-                            color="error"
-                            size="small"
-                            disabled={busyId === u.id}
-                            onClick={() => handleRemove(u)}
-                          >
-                            {busyId === u.id ? <CircularProgress size={16} /> : 'Remove'}
-                          </Button>
+                        {u.orgRole !== 'org_admin' && u.orgRole !== 'admin' && (
+                          <Stack direction="row" spacing={1}>
+                            {u.orgRole !== 'editor' && (
+                              <Button
+                                variant="text"
+                                size="small"
+                                disabled={busyKey !== null}
+                                onClick={() => handleChangeRole(u, 'editor')}
+                              >
+                                Make Editor
+                              </Button>
+                            )}
+                            {u.orgRole !== 'viewer' && (
+                              <Button
+                                variant="text"
+                                size="small"
+                                disabled={busyKey !== null}
+                                onClick={() => handleChangeRole(u, 'viewer')}
+                              >
+                                Make Viewer
+                              </Button>
+                            )}
+                            <Button
+                              variant="text"
+                              color="error"
+                              size="small"
+                              disabled={busyKey !== null}
+                              onClick={() => handleRemove(u)}
+                            >
+                              {busyKey === `remove-${u.id}` ? <CircularProgress size={16} /> : 'Remove'}
+                            </Button>
+                          </Stack>
                         )}
                       </TableCell>
                     )}

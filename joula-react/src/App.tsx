@@ -16,6 +16,7 @@ import UserProfile from './pages/UserProfile'
 import EnterComments from './pages/EnterComments'
 import AccountSettings from './pages/AccountSettings'
 import PendingUsers from './pages/PendingUsers'
+import PendingMasjids from './pages/PendingMasjids'
 import AddAddress from './pages/AddAddress'
 import AddMasjid from './pages/AddMasjid'
 import AddressImport from './pages/AddressImport'
@@ -23,6 +24,11 @@ import MissingCoordinates from './pages/MissingCoordinates'
 import GeocodeReview from './pages/GeocodeReview'
 import BillingPage from './pages/BillingPage'
 import OrgUsersPage from './pages/OrgUsersPage'
+import OrgUserDetailsPage from './pages/OrgUserDetailsPage'
+import BuildTeamPage from './pages/BuildTeamPage'
+import ViewUsers from './pages/ViewUsers'
+import AdminUserMasjids from './pages/AdminUserMasjids'
+import AdminUserTeam from './pages/AdminUserTeam'
 import PrivateRoute from './components/PrivateRoute'
 import SubscriptionGuard from './components/SubscriptionGuard'
 import SubscriptionBanner from './components/SubscriptionBanner'
@@ -101,135 +107,195 @@ function App() {
   return (
     <AuthProvider>
       <Router basename={import.meta.env.BASE_URL}>
-        <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
+        <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100dvh' }}>
           <AppHeader />
 
           <Container
             maxWidth={false}
             disableGutters
-            sx={{ flexGrow: 1, overflow: 'hidden' }}
+            sx={{
+              flexGrow: 1,
+              display: 'flex',
+              flexDirection: 'column',
+              minHeight: { xs: 'calc(100dvh - 56px)', sm: 'calc(100dvh - 64px)' },
+              pb: '56px',
+            }}
           >
             <SubscriptionBanner />
-            <Routes>
-              <Route path="/login" element={<Login />} />
-              <Route path="/" element={<Navigate to="/dashboard" replace />} />
-              <Route
-                path="/dashboard"
-                element={
-                  <PrivateRoute>
-                    <Dashboard />
-                  </PrivateRoute>
-                }
-              />
-              <Route
-                path="/area-selection"
-                element={
-                  <PrivateRoute>
-                    <AreaSelection />
-                  </PrivateRoute>
-                }
-              />
-              <Route
-                path="/map"
-                element={
-                  <PrivateRoute>
-                    <MapView />
-                  </PrivateRoute>
-                }
-              />
-              <Route
-                path="/profile"
-                element={
-                  <PrivateRoute>
-                    <UserProfile />
-                  </PrivateRoute>
-                }
-              />
-              <Route
-                path="/account"
-                element={
-                  <PrivateRoute>
-                    <AccountSettings />
-                  </PrivateRoute>
-                }
-              />
-              <Route
-                path="/comments"
-                element={
-                  <PrivateRoute>
-                    <EnterComments />
-                  </PrivateRoute>
-                }
-              />
-              <Route
-                path="/pending-users"
-                element={
-                  <PrivateRoute>
-                    <PendingUsers />
-                  </PrivateRoute>
-                }
-              />
-              <Route
-                path="/addresses/new"
-                element={
-                  <PrivateRoute>
-                    <AddAddress />
-                  </PrivateRoute>
-                }
-              />
-              <Route
-                path="/masjids/new"
-                element={
-                  <PrivateRoute>
-                    <AddMasjid />
-                  </PrivateRoute>
-                }
-              />
-              <Route
-                path="/address-import"
-                element={
-                  <PrivateRoute>
-                    <AddressImport />
-                  </PrivateRoute>
-                }
-              />
-              <Route
-                path="/missing-coordinates"
-                element={
-                  <PrivateRoute>
-                    <MissingCoordinates />
-                  </PrivateRoute>
-                }
-              />
-              <Route
-                path="/geocode-review"
-                element={
-                  <PrivateRoute>
-                    <SubscriptionGuard>
-                      <GeocodeReview />
-                    </SubscriptionGuard>
-                  </PrivateRoute>
-                }
-              />
-              <Route
-                path="/billing"
-                element={
-                  <PrivateRoute>
-                    <BillingPage />
-                  </PrivateRoute>
-                }
-              />
-              <Route
-                path="/org-users"
-                element={
-                  <PrivateRoute>
-                    <SubscriptionGuard>
-                      <OrgUsersPage />
-                    </SubscriptionGuard>
-                  </PrivateRoute>
-                }
-              />
-            </Routes>
+            <Box sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+              <Routes>
+                <Route path="/login" element={<Login />} />
+                <Route path="/" element={<Navigate to="/dashboard" replace />} />
+                <Route
+                  path="/dashboard"
+                  element={
+                    <PrivateRoute>
+                      <Dashboard />
+                    </PrivateRoute>
+                  }
+                />
+                <Route
+                  path="/area-selection"
+                  element={
+                    <PrivateRoute>
+                      <AreaSelection />
+                    </PrivateRoute>
+                  }
+                />
+                <Route
+                  path="/map"
+                  element={
+                    <PrivateRoute>
+                      <MapView />
+                    </PrivateRoute>
+                  }
+                />
+                <Route
+                  path="/profile"
+                  element={
+                    <PrivateRoute>
+                      <UserProfile />
+                    </PrivateRoute>
+                  }
+                />
+                <Route
+                  path="/account"
+                  element={
+                    <PrivateRoute>
+                      <AccountSettings />
+                    </PrivateRoute>
+                  }
+                />
+                <Route
+                  path="/comments"
+                  element={
+                    <PrivateRoute>
+                      <EnterComments />
+                    </PrivateRoute>
+                  }
+                />
+                <Route
+                  path="/pending-users"
+                  element={
+                    <PrivateRoute>
+                      <PendingUsers />
+                    </PrivateRoute>
+                  }
+                />
+                <Route
+                  path="/addresses/new"
+                  element={
+                    <PrivateRoute>
+                      <AddAddress />
+                    </PrivateRoute>
+                  }
+                />
+                <Route
+                  path="/masjids/new"
+                  element={
+                    <PrivateRoute>
+                      <AddMasjid />
+                    </PrivateRoute>
+                  }
+                />
+                <Route
+                  path="/address-import"
+                  element={
+                    <PrivateRoute>
+                      <AddressImport />
+                    </PrivateRoute>
+                  }
+                />
+                <Route
+                  path="/missing-coordinates"
+                  element={
+                    <PrivateRoute>
+                      <MissingCoordinates />
+                    </PrivateRoute>
+                  }
+                />
+                <Route
+                  path="/geocode-review"
+                  element={
+                    <PrivateRoute>
+                      <SubscriptionGuard>
+                        <GeocodeReview />
+                      </SubscriptionGuard>
+                    </PrivateRoute>
+                  }
+                />
+                <Route
+                  path="/billing"
+                  element={
+                    <PrivateRoute>
+                      <BillingPage />
+                    </PrivateRoute>
+                  }
+                />
+                <Route
+                  path="/org-users"
+                  element={
+                    <PrivateRoute>
+                      <SubscriptionGuard>
+                        <OrgUsersPage />
+                      </SubscriptionGuard>
+                    </PrivateRoute>
+                  }
+                />
+                <Route
+                  path="/org-users/:userId"
+                  element={
+                    <PrivateRoute>
+                      <SubscriptionGuard>
+                        <OrgUserDetailsPage />
+                      </SubscriptionGuard>
+                    </PrivateRoute>
+                  }
+                />
+                <Route
+                  path="/build-team"
+                  element={
+                    <PrivateRoute>
+                      <SubscriptionGuard>
+                        <BuildTeamPage />
+                      </SubscriptionGuard>
+                    </PrivateRoute>
+                  }
+                />
+                <Route
+                  path="/pending-masjids"
+                  element={
+                    <PrivateRoute>
+                      <PendingMasjids />
+                    </PrivateRoute>
+                  }
+                />
+                <Route
+                  path="/view-users"
+                  element={
+                    <PrivateRoute>
+                      <ViewUsers />
+                    </PrivateRoute>
+                  }
+                />
+                <Route
+                  path="/admin/users/:userId/masjids"
+                  element={
+                    <PrivateRoute>
+                      <AdminUserMasjids />
+                    </PrivateRoute>
+                  }
+                />
+                <Route
+                  path="/admin/users/:userId/team"
+                  element={
+                    <PrivateRoute>
+                      <AdminUserTeam />
+                    </PrivateRoute>
+                  }
+                />
+              </Routes>
+            </Box>
           </Container>
 
           <AppFooter />

@@ -37,13 +37,17 @@ function get_auth_user_mc($con) {
     $found = mysqli_stmt_fetch($stmt);
     mysqli_stmt_close($stmt);
     if (!$found || !$userId) return null;
-    // permission_to_level: '' or NULL => 0, 'Staff' => 1, 'Admin' => 3, numeric => intval
+    // permission_to_level: ''/NULL => 0, Viewer => 1, Editor => 2, Admin => 3, Super Admin => 4
     $level = 0;
     if (is_numeric($perms)) {
         $level = intval($perms);
+    } elseif (stripos((string)$perms, 'super') !== false) {
+        $level = 4;
     } elseif (stripos((string)$perms, 'admin') !== false) {
         $level = 3;
-    } elseif (stripos((string)$perms, 'staff') !== false) {
+    } elseif (stripos((string)$perms, 'editor') !== false || stripos((string)$perms, 'staff') !== false) {
+        $level = 2;
+    } elseif (stripos((string)$perms, 'viewer') !== false) {
         $level = 1;
     }
     return ['id' => intval($userId), 'permission_level' => $level];
@@ -56,11 +60,11 @@ if (!$authUser) {
 }
 
 $userId          = $authUser['id'];
-$isAdmin         = $authUser['permission_level'] >= 3;
+$isSuperAdmin    = $authUser['permission_level'] >= 4;
 
-// GET — return addresses missing coordinates (admin sees all; regular user sees only their own)
+// GET — return addresses missing coordinates (super admin sees all; others see only their own)
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
-    if ($isAdmin) {
+    if ($isSuperAdmin) {
         $sql = "SELECT ID, Name, H_No, Apt_No, St_Name, City, State, Zip, Locality
                 FROM Addresses_AWS
                 WHERE Coordinates IS NULL OR TRIM(Coordinates) = ''

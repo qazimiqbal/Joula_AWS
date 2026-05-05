@@ -149,7 +149,7 @@ const MapView: React.FC = () => {
       ]).then(([addressData, masjidData]) => {
         setAddresses(addressData)
         setMasjids(masjidData)
-        if (addressData.length > 0) {
+        if (addressData.length > 0 && typeof addressData[0].latitude === 'number' && typeof addressData[0].longitude === 'number') {
           setMapCenter([addressData[0].latitude, addressData[0].longitude])
         } else if (masjidData.length > 0 && typeof masjidData[0].latitude === 'number' && typeof masjidData[0].longitude === 'number') {
           setMapCenter([masjidData[0].latitude, masjidData[0].longitude])
@@ -263,7 +263,7 @@ const MapView: React.FC = () => {
               )
             })}
 
-          {addresses.map((address) => {
+          {addresses.filter(a => typeof a.latitude === 'number' && typeof a.longitude === 'number').map((address) => {
             const color = getMarkerColor(address.lastVisit)
             const fullAddress = [address.aptNo, address.houseNo, address.streetName, address.city, address.state, address.zip]
               .filter(Boolean)
@@ -271,7 +271,7 @@ const MapView: React.FC = () => {
             return (
             <CircleMarker
               key={address.id}
-              center={[address.latitude, address.longitude]}
+              center={[address.latitude as number, address.longitude as number]}
               {...{ radius: 6 } as object}
               pathOptions={{ color: '#333', weight: 1, fillColor: color, fillOpacity: 1 }}
             >

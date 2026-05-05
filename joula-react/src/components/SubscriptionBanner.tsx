@@ -9,8 +9,12 @@ import { useAuth } from '@/context/AuthContext'
  * Disappears when plan is active.
  */
 const SubscriptionBanner: React.FC = () => {
-  const { subscription } = useAuth()
+  const { user, subscription } = useAuth()
   const navigate = useNavigate()
+  const permissionLevel = user?.permissionLevel ?? (user?.role === 'admin' ? 3 : 1)
+
+  // Super admins have no trial/subscription — never show the banner
+  if (permissionLevel >= 4) return null
 
   if (!subscription) return null
   if (subscription.planStatus === 'active') return null
