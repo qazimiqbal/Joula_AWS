@@ -9,23 +9,94 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 include('db.php');
 mysqli_select_db($con, $db);
 
+function get_authenticated_user($con) {
+        $authHeader = isset($_SERVER['HTTP_AUTHORIZATION']) ? $_SERVER['HTTP_AUTHORIZATION'] : '';
+        if (strpos($authHeader, 'Bearer ') !== 0) return null;
+        $token = substr($authHeader, 7);
+
+        $stmt = mysqli_prepare($con,
+                "SELECT id, org_id, Permissions
+                 FROM Login_user_AWS
+                 WHERE auth_token = ? AND status = 'true' LIMIT 1");
+        if (!$stmt) return null;
+        mysqli_stmt_bind_param($stmt, 's', $token);
+        mysqli_stmt_execute($stmt);
+        $userId = $orgId = $permissions = null;
+        mysqli_stmt_bind_result($stmt, $userId, $orgId, $permissions);
+        $found = mysqli_stmt_fetch($stmt);
+        mysqli_stmt_close($stmt);
+        if (!$found || !$userId) return null;
+        return [
+                'id' => intval($userId),
+                'org_id' => intval($orgId),
+                'permission_level' => intval($permissions),
+        ];
+}
+
+function resolve_effective_owner_id($con, $userId, $orgId, $permissionLevel) {
+        if ($permissionLevel >= 3 || $orgId <= 0) {
+                return intval($userId);
+        }
+
+        $safeOrg = intval($orgId);
+        $ownerRes = mysqli_query(
+                $con,
+                "SELECT id
+                 FROM Login_user_AWS
+                 WHERE org_id = $safeOrg
+                     AND status = 'true'
+                     AND (org_role = 'org_admin' OR org_role = 'admin' OR Permissions = '3' OR Permissions = '4')
+                 ORDER BY
+                     CASE
+                         WHEN org_role = 'org_admin' THEN 0
+                         WHEN org_role = 'admin' THEN 1
+                         ELSE 2
+                     END,
+                     id ASC
+                 LIMIT 1"
+        );
+        if (!$ownerRes) return intval($userId);
+        $ownerRow = mysqli_fetch_assoc($ownerRes);
+        mysqli_free_result($ownerRes);
+
+        return ($ownerRow && $ownerRow['id']) ? intval($ownerRow['id']) : intval($userId);
+}
+
 
 $state = isset($_GET['state']) ? trim($_GET['state']) : '';
 $locality = isset($_GET['locality']) ? trim($_GET['locality']) : '';
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 $masjidId = isset($_GET['masjidId']) ? intval($_GET['masjidId']) : 0;
+$mine = isset($_GET['mine']) && $_GET['mine'] === '1';
+$listAll = isset($_GET['listAll']) && $_GET['listAll'] === '1';
+$me = ($mine || $listAll) ? get_authenticated_user($con) : null;
 
 $params = array();
 $types = '';
 
-$sql = "SELECT ID, Name, City, Coordinates, H_No, St_Name, State, Zip, Locality, Last_Visit, Apt_No, Comments
-        FROM Addresses_AWS
-    WHERE Coordinates != '' AND Coordinates != ',' AND COALESCE(`Clear`, 1) = 1";
+if ($listAll) {
+    $sql = "SELECT ID, Name, City, Coordinates, H_No, St_Name, State, Zip, Locality, Last_Visit, Apt_No, Comments
+            FROM Addresses_AWS
+        WHERE 1=1";
+} else {
+    $sql = "SELECT ID, Name, City, Coordinates, H_No, St_Name, State, Zip, Locality, Last_Visit, Apt_No, Comments
+            FROM Addresses_AWS
+        WHERE Coordinates != '' AND Coordinates != ',' AND COALESCE(`Clear`, 1) = 1";
+}
 
 if ($masjidId > 0) {
-    $sql .= " AND Masjid_id = ?";
-    $types .= 'i';
+    $sql .= " AND (Masjid_id = ? OR TRIM(Masjid) = (SELECT TRIM(Name) FROM Masjids_AWS WHERE ID = ? LIMIT 1))";
+    $types .= 'ii';
     $params[] = $masjidId;
+    $params[] = $masjidId;
+}
+
+if ($mine && $me) {
+    $effectiveOwnerId = resolve_effective_owner_id($con, $me['id'], $me['org_id'], $me['permission_level']);
+    $sql .= " AND (uploaded_by = ? OR Masjid_id IN (SELECT ID FROM Masjids_AWS WHERE Created_by = ?))";
+    $types .= 'ii';
+    $params[] = $effectiveOwnerId;
+    $params[] = $effectiveOwnerId;
 }
 
 if ($state !== '') {

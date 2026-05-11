@@ -24,80 +24,60 @@ import {
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import apiService from '@/services/api';
-import { PendingMasjidRecord } from '@/types';
+import { PendingGeocodeRecord } from '@/types';
 import { useNavigate } from 'react-router-dom';
 import { GoogleMap, Marker, useJsApiLoader } from '@react-google-maps/api';
 import { useAuth } from '@/context/AuthContext';
 
-function getLatLngFromCoordinates(coordinates?: string): { lat: number, lng: number } | null {
-  if (!coordinates) return null;
-  const parts = coordinates.split(',');
-  if (parts.length !== 2) return null;
-  const lat = parseFloat(parts[0]);
-  const lng = parseFloat(parts[1]);
-  if (isNaN(lat) || isNaN(lng)) return null;
-  return { lat, lng };
-}
-
 const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
-const MASJID_PNG_SRC = `${import.meta.env.BASE_URL}masjid-marker.png`;
 
-const PendingMasjids: React.FC = () => {
+const hasValidCoordinates = (address: PendingGeocodeRecord): boolean =>
+  typeof address.latitude === 'number' && typeof address.longitude === 'number';
+
+const PendingAddresses: React.FC = () => {
   const { user } = useAuth();
   const { isLoaded } = useJsApiLoader({ googleMapsApiKey: GOOGLE_MAPS_API_KEY });
-  const masjidIcon = React.useMemo(() => {
-    if (!isLoaded) return undefined;
-    return {
-      url: MASJID_PNG_SRC,
-      scaledSize: new window.google.maps.Size(36, 36),
-      anchor: new window.google.maps.Point(18, 36),
-    };
-  }, [isLoaded]);
-  const [pendingMasjids, setPendingMasjids] = useState<PendingMasjidRecord[]>([]);
+  const [pendingAddresses, setPendingAddresses] = useState<PendingGeocodeRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [mapOpen, setMapOpen] = useState(false);
-  const [selectedMasjid, setSelectedMasjid] = useState<PendingMasjidRecord | null>(null);
+  const [selectedAddress, setSelectedAddress] = useState<PendingGeocodeRecord | null>(null);
   const [approveLoading, setApproveLoading] = useState<number | null>(null);
+  const [approveAllLoading, setApproveAllLoading] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editSaving, setEditSaving] = useState(false);
   const [editDeleting, setEditDeleting] = useState(false);
-  const [editForm, setEditForm] = useState<PendingMasjidRecord | null>(null);
+  const [editForm, setEditForm] = useState<PendingGeocodeRecord | null>(null);
   const navigate = useNavigate();
   const permissionLevel = user?.permissionLevel ?? 0;
   const isSuperAdmin = permissionLevel >= 4;
   const canApprove = permissionLevel >= 2;
 
-  const loadPendingMasjids = async (isSuper: boolean, userId: number): Promise<PendingMasjidRecord[]> => {
+  const loadPendingAddresses = async (isSuper: boolean, userId: number): Promise<PendingGeocodeRecord[]> => {
     if (isSuper) {
-      return apiService.getMasjidReviewList();
+      return apiService.getAddressReviewList();
     }
-
-    try {
-      return await apiService.getMyPendingMasjids();
-    } catch {
-      return apiService.getMasjidReviewList(userId);
-    }
+    return apiService.getAddressReviewList(userId);
   };
 
   useEffect(() => {
-    fetchPendingMasjids();
+    fetchPendingAddresses();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSuperAdmin, user?.id]);
 
-  const fetchPendingMasjids = async () => {
+  const fetchPendingAddresses = async () => {
     setLoading(true);
     setError('');
     try {
       if (!user?.id) {
-        setPendingMasjids([]);
+        setPendingAddresses([]);
         return;
       }
 
-      const data = await loadPendingMasjids(isSuperAdmin, user.id);
-      setPendingMasjids(data);
-    } catch (err) {
-      setError('Failed to load pending masjids');
+      const data = await loadPendingAddresses(isSuperAdmin, user.id);
+      setPendingAddresses(data);
+    } catch {
+      setError('Failed to load pending addresses');
     } finally {
       setLoading(false);
     }
@@ -107,17 +87,44 @@ const PendingMasjids: React.FC = () => {
     setApproveLoading(id);
     setError('');
     try {
-      await apiService.approveMasjid(id);
-      setPendingMasjids((prev) => prev.filter((m) => m.id !== id));
-    } catch (err) {
-      setError('Failed to approve masjid');
+      await apiService.approveAddress(id);
+      setPendingAddresses((prev) => prev.filter((a) => a.id !== id));
+    } catch {
+      setError('Failed to approve address');
     } finally {
       setApproveLoading(null);
     }
   };
 
-  const handleOpenEdit = (masjid: PendingMasjidRecord) => {
-    setEditForm({ ...masjid });
+  const handleApproveAll = async () => {
+    setApproveAllLoading(true);
+    setError('');
+    try {
+      await apiService.approveAllAddresses();
+      await fetchPendingAddresses();
+    } catch {
+      setError('Failed to approve all pending addresses');
+    } finally {
+      setApproveAllLoading(false);
+    }
+  };
+
+  const handleOpenEdit = (address: PendingGeocodeRecord) => {
+    const coords =
+      typeof address.latitude === 'number' && typeof address.longitude === 'number'
+        ? `${address.latitude},${address.longitude}`
+        : (address.coordinates || '');
+
+    setEditForm({
+      ...address,
+      aptNo: address.aptNo || '',
+      locality: address.locality || '',
+      comments: address.comments || '',
+      lastVisit: address.lastVisit || '',
+      verified: address.verified === 'Y' ? 'Y' : 'N',
+      masjid: address.masjid || '',
+      coordinates: coords,
+    });
     setEditOpen(true);
   };
 
@@ -126,7 +133,7 @@ const PendingMasjids: React.FC = () => {
     setEditSaving(true);
     setError('');
     try {
-      await apiService.updatePendingMasjid(editForm.id, {
+      await apiService.updatePendingAddress(editForm.id, {
         name: editForm.name,
         houseNo: editForm.houseNo,
         aptNo: editForm.aptNo || '',
@@ -134,13 +141,18 @@ const PendingMasjids: React.FC = () => {
         city: editForm.city,
         state: editForm.state,
         zip: editForm.zip,
-        coordinates: editForm.Coordinates || '',
+        locality: editForm.locality || '',
+        comments: editForm.comments || '',
+        lastVisit: editForm.lastVisit || '',
+        masjid: editForm.masjid || '',
+        verified: editForm.verified === 'Y' ? 'Y' : 'N',
+        coordinates: editForm.coordinates || '',
       });
-      await fetchPendingMasjids();
+      await fetchPendingAddresses();
       setEditOpen(false);
       setEditForm(null);
     } catch {
-      setError('Failed to update masjid');
+      setError('Failed to update pending address');
     } finally {
       setEditSaving(false);
     }
@@ -151,60 +163,61 @@ const PendingMasjids: React.FC = () => {
     setEditDeleting(true);
     setError('');
     try {
-      await apiService.deleteMasjid(editForm.id);
-      setPendingMasjids((prev) => prev.filter((m) => m.id !== editForm.id));
+      await apiService.deleteAddress(editForm.id);
+      setPendingAddresses((prev) => prev.filter((a) => a.id !== editForm.id));
       setEditOpen(false);
       setEditForm(null);
     } catch {
-      setError('Failed to delete masjid');
+      setError('Failed to delete address');
     } finally {
       setEditDeleting(false);
     }
   };
 
-  const handleViewMap = (masjid: PendingMasjidRecord) => {
-    setSelectedMasjid(masjid);
+  const handleViewMap = (address: PendingGeocodeRecord) => {
+    setSelectedAddress(address);
     setMapOpen(true);
   };
+
   const handleCloseMap = () => {
     setMapOpen(false);
-    setSelectedMasjid(null);
+    setSelectedAddress(null);
   };
 
-  if (mapOpen && selectedMasjid) {
-    const coords = getLatLngFromCoordinates(selectedMasjid.Coordinates);
+  if (mapOpen && selectedAddress) {
+    const hasCoords = typeof selectedAddress.latitude === 'number' && typeof selectedAddress.longitude === 'number';
     return (
       <Box sx={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 1300, display: 'flex', flexDirection: 'column' }}>
         <Box sx={{ display: 'flex', alignItems: 'center', px: 1, py: 0.5, bgcolor: 'black', color: 'white', flexShrink: 0 }}>
           <IconButton onClick={handleCloseMap} sx={{ color: 'white', mr: 1 }} size="small">
             <ArrowBackIcon />
           </IconButton>
-          <Typography variant="subtitle1" sx={{ flexGrow: 1 }}>{selectedMasjid.name}</Typography>
-          {(canApprove || selectedMasjid.createdBy === user?.id) && (
+          <Typography variant="subtitle1" sx={{ flexGrow: 1 }}>{selectedAddress.name}</Typography>
+          {canApprove && (
             <Button
               size="small"
               color="success"
               variant="contained"
-              disabled={approveLoading === selectedMasjid.id}
-              onClick={() => { handleApprove(selectedMasjid.id); handleCloseMap(); }}
+              disabled={approveLoading === selectedAddress.id}
+              onClick={() => { handleApprove(selectedAddress.id); handleCloseMap(); }}
             >
-              {approveLoading === selectedMasjid.id ? <CircularProgress size={16} /> : 'Approve'}
+              {approveLoading === selectedAddress.id ? <CircularProgress size={16} /> : 'Approve'}
             </Button>
           )}
         </Box>
         <Box sx={{ flexGrow: 1 }}>
-          {!coords ? (
-            <Box sx={{ p: 3 }}><Typography color="error">No coordinates available for this masjid.</Typography></Box>
+          {!hasCoords ? (
+            <Box sx={{ p: 3 }}><Typography color="error">No coordinates available for this address.</Typography></Box>
           ) : !isLoaded ? (
             <Box sx={{ p: 3 }}><CircularProgress /></Box>
           ) : (
             <GoogleMap
               mapContainerStyle={{ height: '100%', width: '100%' }}
-              center={{ lat: coords.lat, lng: coords.lng }}
+              center={{ lat: selectedAddress.latitude as number, lng: selectedAddress.longitude as number }}
               zoom={15}
               options={{ gestureHandling: 'greedy' }}
             >
-              <Marker position={{ lat: coords.lat, lng: coords.lng }} icon={masjidIcon} />
+              <Marker position={{ lat: selectedAddress.latitude as number, lng: selectedAddress.longitude as number }} />
             </GoogleMap>
           )}
         </Box>
@@ -223,15 +236,28 @@ const PendingMasjids: React.FC = () => {
     }}>
       <Card elevation={1} sx={{ borderRadius: 0, p: 0, width: '100%', maxWidth: '100%', flex: 1, display: 'flex', flexDirection: 'column' }}>
         <CardHeader
-          title={<Typography variant="h6">Pending Masjids for Approval</Typography>}
-          subheader={<Typography variant="body2" color="text.secondary">{isSuperAdmin ? 'Review and approve new masjid submissions.' : 'View your pending masjid submissions.'}</Typography>}
+          title={<Typography variant="h6">Pending Addresses for Approval</Typography>}
+          subheader={<Typography variant="body2" color="text.secondary">{isSuperAdmin ? 'Review and approve new address submissions.' : 'View your pending address submissions.'}</Typography>}
+          action={
+            canApprove && pendingAddresses.length > 0 ? (
+              <Button
+                color="success"
+                variant="contained"
+                onClick={handleApproveAll}
+                disabled={approveAllLoading}
+                sx={{ mt: 1, mr: 1, fontWeight: 700 }}
+              >
+                {approveAllLoading ? <CircularProgress size={18} /> : 'Approve All With Coordinates'}
+              </Button>
+            ) : undefined
+          }
         />
         <CardContent sx={{ flex: 1 }}>
           {error && <Typography color="error" sx={{ mb: 1 }}>{error}</Typography>}
           {loading ? (
             <CircularProgress />
-          ) : pendingMasjids.length === 0 ? (
-            <Typography>No pending masjids.</Typography>
+          ) : pendingAddresses.length === 0 ? (
+            <Typography>No pending addresses.</Typography>
           ) : (
             <TableContainer component={Paper} sx={{ borderRadius: 2 }}>
               <Table size="small">
@@ -239,25 +265,33 @@ const PendingMasjids: React.FC = () => {
                   <TableRow>
                     <TableCell>Name</TableCell>
                     <TableCell>Address</TableCell>
+                    <TableCell>Geocoding</TableCell>
                     <TableCell>Actions</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {pendingMasjids.map((masjid) => (
-                    <TableRow key={masjid.id}>
-                      <TableCell>{masjid.name}</TableCell>
-                      <TableCell>{[masjid.houseNo, masjid.aptNo, masjid.streetName].filter(Boolean).join(' ')}</TableCell>
+                  {pendingAddresses.map((address) => (
+                    <TableRow key={address.id}>
+                      <TableCell>{address.name}</TableCell>
+                      <TableCell>{[address.houseNo, address.aptNo, address.streetName].filter(Boolean).join(' ')}</TableCell>
                       <TableCell>
-                        <Button size="small" variant="outlined" sx={{ mr: 1 }} onClick={() => handleViewMap(masjid)}>
+                        {hasValidCoordinates(address) ? (
+                          <Typography variant="body2" color="success.main" fontWeight={600}>Ready</Typography>
+                        ) : (
+                          <Typography variant="body2" color="warning.main" fontWeight={700}>Need Geocoding</Typography>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <Button size="small" variant="outlined" sx={{ mr: 1 }} onClick={() => handleViewMap(address)}>
                           View on Map
                         </Button>
-                        {(canApprove || masjid.createdBy === user?.id) && (
-                          <Button size="small" color="success" variant="contained" sx={{ mr: 1, fontWeight: 700, letterSpacing: 1 }} onClick={() => handleApprove(masjid.id)} disabled={approveLoading === masjid.id}>
-                            {approveLoading === masjid.id ? <CircularProgress size={18} /> : 'Approve'}
+                        {canApprove && (
+                          <Button size="small" color="success" variant="contained" sx={{ mr: 1, fontWeight: 700, letterSpacing: 1 }} onClick={() => handleApprove(address.id)} disabled={approveLoading === address.id}>
+                            {approveLoading === address.id ? <CircularProgress size={18} /> : 'Approve'}
                           </Button>
                         )}
-                        {(canApprove || masjid.createdBy === user?.id) && (
-                          <Button size="small" variant="contained" color="warning" onClick={() => handleOpenEdit(masjid)}>
+                        {canApprove && (
+                          <Button size="small" variant="contained" color="warning" onClick={() => handleOpenEdit(address)}>
                             Edit
                           </Button>
                         )}
@@ -271,7 +305,7 @@ const PendingMasjids: React.FC = () => {
         </CardContent>
       </Card>
       <Dialog open={editOpen} onClose={() => setEditOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>Edit Pending Masjid</DialogTitle>
+        <DialogTitle>Edit Pending Address</DialogTitle>
         <DialogContent>
           {editForm && (
             <Stack spacing={2} sx={{ mt: 1 }}>
@@ -282,7 +316,12 @@ const PendingMasjids: React.FC = () => {
               <TextField label="City" value={editForm.city} onChange={(e) => setEditForm({ ...editForm, city: e.target.value })} fullWidth />
               <TextField label="State" value={editForm.state} onChange={(e) => setEditForm({ ...editForm, state: e.target.value })} fullWidth />
               <TextField label="Zip" value={editForm.zip} onChange={(e) => setEditForm({ ...editForm, zip: e.target.value })} fullWidth />
-              <TextField label="Coordinates (lat,lng)" placeholder="e.g. 33.8619429,-84.037217" value={editForm.Coordinates || ''} onChange={(e) => setEditForm({ ...editForm, Coordinates: e.target.value })} fullWidth />
+              <TextField label="Locality" value={editForm.locality || ''} onChange={(e) => setEditForm({ ...editForm, locality: e.target.value })} fullWidth />
+              <TextField label="Masjid" value={editForm.masjid || ''} onChange={(e) => setEditForm({ ...editForm, masjid: e.target.value })} fullWidth />
+              <TextField label="Verified (Y/N)" value={editForm.verified || 'N'} onChange={(e) => setEditForm({ ...editForm, verified: e.target.value.toUpperCase() === 'Y' ? 'Y' : 'N' })} fullWidth />
+              <TextField label="Coordinates (lat,lng)" placeholder="e.g. 33.8619429,-84.037217" value={editForm.coordinates || ''} onChange={(e) => setEditForm({ ...editForm, coordinates: e.target.value })} fullWidth />
+              <TextField label="Last Visit (YYYY-MM-DD)" value={editForm.lastVisit || ''} onChange={(e) => setEditForm({ ...editForm, lastVisit: e.target.value })} fullWidth />
+              <TextField label="Comments" multiline rows={3} value={editForm.comments || ''} onChange={(e) => setEditForm({ ...editForm, comments: e.target.value })} fullWidth />
             </Stack>
           )}
         </DialogContent>
@@ -303,4 +342,4 @@ const PendingMasjids: React.FC = () => {
   );
 };
 
-export default PendingMasjids;
+export default PendingAddresses;

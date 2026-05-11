@@ -12,7 +12,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 include('db.php');
 mysqli_select_db($con, $db);
 
-// ── GET: fetch existing Comments, Ethinicity, Potential for an address ────────
+// ── GET: fetch existing Comments for an address ────────
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     $id = isset($_GET['id']) ? intval($_GET['id']) : 0;
     if ($id === 0) {
@@ -21,7 +21,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         exit;
     }
 
-    $stmt = mysqli_prepare($con, 'SELECT Comments, Ethinicity, Potential FROM Addresses_AWS WHERE ID = ?');
+    $stmt = mysqli_prepare($con, 'SELECT Comments FROM Addresses_AWS WHERE ID = ?');
     if (!$stmt) {
         http_response_code(500);
         echo json_encode(['success' => false, 'message' => 'Query prepare failed']);
@@ -29,7 +29,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     }
     mysqli_stmt_bind_param($stmt, 'i', $id);
     mysqli_stmt_execute($stmt);
-    mysqli_stmt_bind_result($stmt, $comments, $ethinicity, $potential);
+    mysqli_stmt_bind_result($stmt, $comments);
 
     if (mysqli_stmt_fetch($stmt)) {
         mysqli_stmt_close($stmt);
@@ -37,8 +37,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
             'success' => true,
             'data'    => [
                 'comments'   => $comments  ?? '',
-                'ethinicity' => $ethinicity ?? 'Others',
-                'potential'  => $potential  ?? 'No',
+                'ethinicity' => 'Others',
+                'potential'  => 'No',
             ],
         ]);
     } else {
@@ -57,8 +57,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $today      = isset($input['today'])      ? trim($input['today'])        : date('Y-m-d');
     $actionTaken = isset($input['actionTaken']) ? trim($input['actionTaken']) : '';
     $comments   = isset($input['comments'])   ? trim($input['comments'])     : '';
-    $ethinicity = isset($input['ethinicity']) ? trim($input['ethinicity'])   : 'Others';
-    $potential  = isset($input['potential'])  ? trim($input['potential'])    : 'No';
 
     if ($id === 0) {
         http_response_code(400);
@@ -88,26 +86,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $newStatus = 'Non_muslim'; $newVerified = 'Y'; break;
     }
 
-    // Check if this is the first meet (R1 is '0000-00-00' or empty)
-    $r1Stmt = mysqli_prepare($con, 'SELECT COALESCE(R1, "") FROM Addresses_AWS WHERE ID = ?');
-    mysqli_stmt_bind_param($r1Stmt, 'i', $id);
-    mysqli_stmt_execute($r1Stmt);
-    mysqli_stmt_bind_result($r1Stmt, $firstmeet);
-    mysqli_stmt_fetch($r1Stmt);
-    mysqli_stmt_close($r1Stmt);
-    $isFirstMeet = (trim($firstmeet) === '0000-00-00' || trim($firstmeet) === '');
-
     // Build parameterised UPDATE
     // Base columns always updated
-    $setCols  = 'Last_Visit=?, R1_comments=?, Comments=?, Ethinicity=?, Potential=?';
-    $types    = 'sssss';
-    $params   = [$today, $actionTaken, $comments, $ethinicity, $potential];
-
-    if ($isFirstMeet) {
-        $setCols .= ', R1=?';
-        $types   .= 's';
-        $params[] = $today;
-    }
+    $setCols  = 'Last_Visit=?, Comments=?';
+    $types    = 'ss';
+    $params   = [$today, $comments];
     if ($newStatus !== null) {
         $setCols .= ', Status=?';
         $types   .= 's';

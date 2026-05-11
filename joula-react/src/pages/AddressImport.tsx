@@ -35,7 +35,9 @@ const CSV_TEMPLATE_HEADERS = [
   'locality',
   'comments',
   'lastVisit',
-  'halaqa',
+  'masjid',
+  'coordinates',
+  'verified',
 ]
 
 const CSV_EXAMPLE_ROW = [
@@ -49,12 +51,53 @@ const CSV_EXAMPLE_ROW = [
   'Eastside',
   '',
   '',
-  'Atlanta East',
+  'Omar',
+  '33.7490,-84.3880',
+  'N',
 ]
+
+function toCsvCell(value: string) {
+  const normalized = value ?? ''
+  if (/[",\r\n]/.test(normalized)) {
+    return `"${normalized.replace(/"/g, '""')}"`
+  }
+  return normalized
+}
+
+function parseCsvLine(line: string): string[] {
+  const values: string[] = []
+  let current = ''
+  let inQuotes = false
+
+  for (let i = 0; i < line.length; i += 1) {
+    const char = line[i]
+
+    if (char === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        current += '"'
+        i += 1
+      } else {
+        inQuotes = !inQuotes
+      }
+      continue
+    }
+
+    if (char === ',' && !inQuotes) {
+      values.push(current)
+      current = ''
+      continue
+    }
+
+    current += char
+  }
+
+  values.push(current)
+  return values
+}
 
 function downloadTemplate() {
   const rows = [CSV_TEMPLATE_HEADERS, CSV_EXAMPLE_ROW]
-  const csv = rows.map((r) => r.join(',')).join('\r\n')
+  const csv = rows.map((row) => row.map((value) => toCsvCell(value)).join(',')).join('\r\n')
   const blob = new Blob([csv], { type: 'text/csv' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
@@ -75,10 +118,10 @@ function parseCsvPreview(file: File): Promise<{ headers: string[]; rows: Preview
       const text = (e.target?.result as string) || ''
       const lines = text.split(/\r?\n/).filter((l) => l.trim() !== '')
       if (lines.length === 0) return resolve({ headers: [], rows: [] })
-      const headers = lines[0].split(',').map((h) => h.trim().replace(/^\uFEFF/, ''))
+      const headers = parseCsvLine(lines[0]).map((h) => h.trim().replace(/^\uFEFF/, ''))
       const rows: PreviewRow[] = []
       for (let i = 1; i < Math.min(lines.length, 11); i++) {
-        const values = lines[i].split(',')
+        const values = parseCsvLine(lines[i])
         const row: PreviewRow = {}
         headers.forEach((h, idx) => {
           row[h] = (values[idx] || '').trim()
@@ -104,6 +147,7 @@ const AddressImport: React.FC = () => {
   const [ownedMasjids, setOwnedMasjids] = useState<Masjid[]>([])
   const [selectedMasjid, setSelectedMasjid] = useState('')
   const [result, setResult] = useState<ImportAddressesResponse | null>(null)
+  const [validationResult, setValidationResult] = useState<ImportAddressesResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -118,7 +162,7 @@ const AddressImport: React.FC = () => {
       .getMasjids({ orgScoped: true })
       .then((masjids) => {
         setOwnedMasjids(masjids)
-        setSelectedMasjid(masjids[0]?.name || '')
+        setSelectedMasjid('')
       })
       .catch(() => {
         setOwnedMasjids([])
@@ -133,6 +177,7 @@ const AddressImport: React.FC = () => {
     const file = e.target.files?.[0] ?? null
     setSelectedFile(file)
     setResult(null)
+    setValidationResult(null)
     setError(null)
     setPreview(null)
     if (!file) return
@@ -148,7 +193,28 @@ const AddressImport: React.FC = () => {
     }
   }
 
-  const handleUpload = async () => {
+  const handleValidate = async () => {
+    if (!selectedFile) return
+    if (!selectedMasjid) {
+      setError('Select a masjid before importing addresses.')
+      return
+    }
+    setLoading(true)
+    setError(null)
+    setResult(null)
+    setValidationResult(null)
+    try {
+      const res = await apiService.importAddresses(selectedFile, selectedMasjid, { validateOnly: true })
+      setValidationResult(res)
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Upload failed'
+      setError(msg)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleConfirmImport = async () => {
     if (!selectedFile) return
     if (!selectedMasjid) {
       setError('Select a masjid before importing addresses.')
@@ -158,10 +224,30 @@ const AddressImport: React.FC = () => {
     setError(null)
     setResult(null)
     try {
-      const res = await apiService.importAddresses(selectedFile, selectedMasjid)
+      const res = await apiService.importAddresses(selectedFile, selectedMasjid, { ignoreErrors: true })
       setResult(res)
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Upload failed'
+      const msg = err instanceof Error ? err.message : 'Import failed'
+      setError(msg)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleIgnoreAndImport = async () => {
+    if (!selectedFile) return
+    if (!selectedMasjid) {
+      setError('Select a masjid before importing addresses.')
+      return
+    }
+    setLoading(true)
+    setError(null)
+    setResult(null)
+    try {
+      const res = await apiService.importAddresses(selectedFile, selectedMasjid, { ignoreErrors: true })
+      setResult(res)
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Import failed'
       setError(msg)
     } finally {
       setLoading(false)
@@ -172,6 +258,7 @@ const AddressImport: React.FC = () => {
     setSelectedFile(null)
     setPreview(null)
     setResult(null)
+    setValidationResult(null)
     setError(null)
     if (fileInputRef.current) fileInputRef.current.value = ''
     fileInputRef.current?.click()
@@ -205,6 +292,9 @@ const AddressImport: React.FC = () => {
           disabled={loadingMasjids || ownedMasjids.length === 0 || loading}
           helperText={loadingMasjids ? 'Loading your approved masjids...' : 'Imported addresses will be attached to this masjid'}
         >
+          <MenuItem value="" disabled>
+            <em>Select a Masjid</em>
+          </MenuItem>
           {ownedMasjids.map((masjid) => (
             <MenuItem key={masjid.id} value={masjid.name}>
               {masjid.name}
@@ -235,12 +325,34 @@ const AddressImport: React.FC = () => {
         {selectedFile && !loading && (
           <Button
             variant="contained"
-            color="success"
+            color="warning"
             size="small"
-            onClick={handleUpload}
+            onClick={handleValidate}
             disabled={(!!error && !preview) || !selectedMasjid}
           >
-            Upload &amp; Import
+            Validate File
+          </Button>
+        )}
+        {selectedFile && !loading && validationResult?.canImport && (
+          <Button
+            variant="contained"
+            color="success"
+            size="small"
+            onClick={handleConfirmImport}
+            disabled={!selectedMasjid}
+          >
+            Confirm Import All
+          </Button>
+        )}
+        {selectedFile && !loading && validationResult && validationResult.errors.length > 0 && (
+          <Button
+            variant="contained"
+            color="warning"
+            size="small"
+            onClick={handleIgnoreAndImport}
+            disabled={!selectedMasjid || validationResult.inserted === 0}
+          >
+            Ignore Errors &amp; Import Valid Rows
           </Button>
         )}
       </Box>
@@ -267,6 +379,78 @@ const AddressImport: React.FC = () => {
         <Alert severity="error" sx={{ mb: 2 }}>
           {error}
         </Alert>
+      )}
+
+      {/* Validation result */}
+      {validationResult && !result && (
+        <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+          <Typography variant="subtitle1" gutterBottom>
+            Validation Result
+          </Typography>
+          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 1 }}>
+            <Chip label={`${validationResult.inserted} ready to import`} color={validationResult.canImport ? 'success' : 'warning'} size="small" />
+            <Chip label={`${validationResult.skipped} duplicates`} color="default" size="small" />
+            {validationResult.errors.length > 0 && (
+              <Chip label={`${validationResult.errors.length} errors`} color="error" size="small" />
+            )}
+          </Box>
+
+          {validationResult.canImport ? (
+            <Alert severity="success" sx={{ mb: 1 }}>
+              No validation errors found. Click "Confirm Import All" to insert all rows together.
+            </Alert>
+          ) : (
+            <Alert severity="warning" sx={{ mb: 1 }}>
+              Fix the errors below and validate again, or choose "Ignore Errors &amp; Import Valid Rows" to continue with only valid rows.
+            </Alert>
+          )}
+
+          {validationResult.errors.length > 0 && (
+            <Box sx={{ mb: 1, display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
+              <Button
+                variant="contained"
+                color="warning"
+                size="small"
+                onClick={handleIgnoreAndImport}
+                disabled={loading || !selectedMasjid || validationResult.inserted === 0}
+              >
+                Ignore Errors &amp; Import Valid Rows
+              </Button>
+              {validationResult.inserted === 0 && (
+                <Typography variant="caption" color="text.secondary">
+                  No valid rows are available to import.
+                </Typography>
+              )}
+            </Box>
+          )}
+
+          {validationResult.errors.length > 0 && (
+            <>
+              <Divider sx={{ my: 1 }} />
+              <Typography variant="body2" color="error" gutterBottom>
+                Row errors:
+              </Typography>
+              <TableContainer sx={{ maxHeight: 220 }}>
+                <Table size="small">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>Row</TableCell>
+                      <TableCell>Issue</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {validationResult.errors.map((e, i) => (
+                      <TableRow key={i}>
+                        <TableCell>{e.row}</TableCell>
+                        <TableCell>{e.message}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            </>
+          )}
+        </Paper>
       )}
 
       {/* Import result */}
@@ -325,7 +509,7 @@ const AddressImport: React.FC = () => {
       )}
 
       {/* CSV preview */}
-      {preview && preview.headers.length > 0 && !result && (
+      {preview && preview.headers.length > 0 && !result && !validationResult?.canImport && (
         <Paper variant="outlined" sx={{ p: 2 }}>
           <Typography variant="subtitle2" gutterBottom>
             Preview (first {preview.rows.length} data rows)

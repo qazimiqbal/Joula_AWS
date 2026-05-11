@@ -69,6 +69,7 @@ const ViewUsers: React.FC = () => {
         <CardHeader
           title={<Typography variant="h6">View Users</Typography>}
           subheader={<Typography variant="body2" color="text.secondary">All users on the platform.</Typography>}
+
         />
         <CardContent sx={{ flex: 1 }}>
           {error && <Typography color="error" sx={{ mb: 1 }}>{error}</Typography>}

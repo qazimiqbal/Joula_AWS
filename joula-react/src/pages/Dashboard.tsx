@@ -2,25 +2,33 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Box, Grid, Typography, Button, Paper, Card, CardHeader, CardContent } from '@mui/material';
 import apiService from '@/services/api';
-import { Masjid, PendingMasjidRecord } from '@/types';
+import { Masjid, PendingGeocodeRecord, PendingMasjidRecord } from '@/types';
 import { useAuth } from '@/context/AuthContext';
 
 const Dashboard: React.FC = () => {
-  const { user } = useAuth();
+  const { user, subscription } = useAuth();
   const navigate = useNavigate();
   const permissionLevel = user?.permissionLevel ?? (user?.role === 'admin' ? 3 : 1);
   const isSuperAdmin = permissionLevel >= 4;
   const isChildEditor = permissionLevel === 2;
   const isViewer = permissionLevel <= 1;
+  const hasActiveSubscription = isSuperAdmin || user?.isFreeUser || (
+    !!subscription &&
+    subscription.planStatus !== 'expired' &&
+    subscription.planStatus !== 'cancelled' &&
+    subscription.planStatus !== 'past_due'
+  );
   const canManageOwnData = permissionLevel >= 2;
   const [pendingMasjids, setPendingMasjids] = useState<PendingMasjidRecord[]>([]);
+  const [pendingAddresses, setPendingAddresses] = useState<PendingGeocodeRecord[]>([]);
   // availableMasjids powers address access/warning checks.
   // - child editors: org-scoped (mirror parent visibility)
   // - others: own uploads (including pending)
   const [availableMasjids, setAvailableMasjids] = useState<Masjid[]>([]);
   const [loadingAvailableMasjids, setLoadingAvailableMasjids] = useState(true);
   const showPendingMasjidsButton = !isViewer && pendingMasjids.length > 0;
-  const canAddAddresses = canManageOwnData && (isSuperAdmin || (!loadingAvailableMasjids && availableMasjids.length > 0));
+  const showPendingAddressesButton = !isViewer && pendingAddresses.length > 0;
+  const canAddAddresses = hasActiveSubscription && canManageOwnData && (isSuperAdmin || (!loadingAvailableMasjids && availableMasjids.length > 0));
 
   const loadPendingMasjids = async (isSuper: boolean, userId: number): Promise<PendingMasjidRecord[]> => {
     if (isSuper) {
@@ -42,15 +50,29 @@ const Dashboard: React.FC = () => {
     return apiService.getMasjids({ mine: true, includeOwnPending: true });
   };
 
+  const loadPendingAddresses = async (isSuper: boolean, userId: number): Promise<PendingGeocodeRecord[]> => {
+    if (isSuper) {
+      return apiService.getAddressReviewList();
+    }
+
+    try {
+      return await apiService.getMyPendingAddresses();
+    } catch {
+      return apiService.getAddressReviewList(userId);
+    }
+  };
+
   useEffect(() => {
     if (!user?.id || isViewer) {
       setPendingMasjids([]);
+      setPendingAddresses([]);
       setAvailableMasjids([]);
       setLoadingAvailableMasjids(false);
       return;
     }
 
     loadPendingMasjids(isSuperAdmin, user.id).then(setPendingMasjids).catch(() => setPendingMasjids([]));
+    loadPendingAddresses(isSuperAdmin, user.id).then(setPendingAddresses).catch(() => setPendingAddresses([]));
 
     setLoadingAvailableMasjids(true);
     loadAvailableMasjids(user.id)
@@ -98,9 +120,32 @@ const Dashboard: React.FC = () => {
             </Button>
           )}
 
+          {showPendingAddressesButton && (
+            <Button
+              variant="contained"
+              color="info"
+              sx={{ mb: 3, ml: { xs: 0, sm: 2 }, fontWeight: 700, letterSpacing: 1, minWidth: 260 }}
+              onClick={() => navigate('/pending-addresses')}
+            >
+              Approve Addresses
+              {pendingAddresses.length > 0 && (
+                <span style={{
+                  background: '#0288d1',
+                  color: '#fff',
+                  borderRadius: '12px',
+                  padding: '2px 10px',
+                  marginLeft: 12,
+                  fontWeight: 700,
+                  fontSize: 14,
+                  display: 'inline-block',
+                }}>{pendingAddresses.length}</span>
+              )}
+            </Button>
+          )}
+
           <Paper elevation={0} sx={{ p: 2 }}>
             <Grid container spacing={2}>
-              {isSuperAdmin && (
+              {user && (
                 <Grid item xs={12} sm={6} md={4}>
                   <Button fullWidth variant="contained" onClick={() => navigate('/area-selection')}>
                     View Data
@@ -138,18 +183,6 @@ const Dashboard: React.FC = () => {
                   <Typography color="warning.main">
                     Add a masjid first before adding addresses. New addresses must be associated with one of your approved masjids.
                   </Typography>
-                </Grid>
-              )}
-
-              {!isViewer && (
-                <Grid item xs={12} sm={6} md={4}>
-                  <Button
-                    fullWidth
-                    variant="outlined"
-                    onClick={() => navigate('/account')}
-                  >
-                    Account Settings
-                  </Button>
                 </Grid>
               )}
 
@@ -220,6 +253,18 @@ const Dashboard: React.FC = () => {
                         onClick={() => navigate('/billing')}
                       >
                         Subscription &amp; Billing
+                      </Button>
+                    </Grid>
+                  )}
+                  {isSuperAdmin && (
+                    <Grid item xs={12} sm={6} md={4}>
+                      <Button
+                        fullWidth
+                        variant="contained"
+                        color="secondary"
+                        onClick={() => navigate('/create-free-user')}
+                      >
+                        Add Free Editor User
                       </Button>
                     </Grid>
                   )}

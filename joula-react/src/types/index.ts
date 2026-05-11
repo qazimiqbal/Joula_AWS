@@ -7,6 +7,7 @@ export interface User {
   role: 'user' | 'admin'
   permissionLevel?: number
   orgRole?: 'org_admin' | 'admin' | 'editor' | 'viewer'
+  isFreeUser?: boolean
   createdAt: string
 }
 
@@ -170,6 +171,11 @@ export interface PendingGeocodeRecord {
   longitude?: number | null
   uploadedBy?: number | null
   submittedBy?: string
+  comments?: string
+  lastVisit?: string
+  verified?: 'Y' | 'N'
+  masjid?: string
+  coordinates?: string
 }
 
 export interface PendingMasjidRecord {
@@ -207,11 +213,12 @@ export interface CreateAddressRequest {
   city: string
   state: string
   zip: string
-  locality: string
+  locality?: string
   verified?: 'Y' | 'N'
   masjid?: string
   lastVisit?: string
   comments?: string
+  coordinates?: string
   latitude?: number
   longitude?: number
 }
@@ -222,4 +229,6 @@ export interface ImportAddressesResponse {
   skipped: number
   errors: Array<{ row: number; message: string }>
   message: string
+  canImport?: boolean
+  validationOnly?: boolean
 }

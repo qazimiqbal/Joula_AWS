@@ -16,6 +16,11 @@ const SubscriptionGuard: React.FC<{ children: React.ReactNode }> = ({ children }
     return <>{children}</>
   }
 
+  // Free users created by super admin bypass subscription — always let through
+  if (user?.isFreeUser) {
+    return <>{children}</>
+  }
+
   if (!subscription) {
     // No subscription data yet (legacy user or org not set up) — let through
     return <>{children}</>

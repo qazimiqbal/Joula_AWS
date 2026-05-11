@@ -108,6 +108,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
 
 // POST — save coordinates for a specific address
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (!$isSuperAdmin) {
+        respond(403, array('success' => false, 'message' => 'Only super admin can save coordinates'));
+    }
+
     $rawInput = file_get_contents('php://input');
     $input = json_decode($rawInput, true);
     if (!is_array($input)) {
@@ -124,19 +128,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     $coordinates = $latitude . ',' . $longitude;
 
-    // Admins can update any row; regular users can only update their own rows
-    if ($isAdmin) {
-        $stmt = mysqli_prepare($con,
-            "UPDATE Addresses_AWS SET Coordinates = ?, `Clear` = 0 WHERE ID = ?");
-        if (!$stmt) respond(500, array('success' => false, 'message' => 'Failed to prepare update query'));
-        mysqli_stmt_bind_param($stmt, 'si', $coordinates, $id);
-    } else {
-        $stmt = mysqli_prepare($con,
-            "UPDATE Addresses_AWS SET Coordinates = ?, `Clear` = 0
-             WHERE ID = ? AND uploaded_by = ?");
-        if (!$stmt) respond(500, array('success' => false, 'message' => 'Failed to prepare update query'));
-        mysqli_stmt_bind_param($stmt, 'sii', $coordinates, $id, $userId);
-    }
+    $stmt = mysqli_prepare($con,
+        "UPDATE Addresses_AWS SET Coordinates = ?, `Clear` = 0 WHERE ID = ?");
+    if (!$stmt) respond(500, array('success' => false, 'message' => 'Failed to prepare update query'));
+    mysqli_stmt_bind_param($stmt, 'si', $coordinates, $id);
 
     mysqli_stmt_execute($stmt);
     $affected = mysqli_stmt_affected_rows($stmt);

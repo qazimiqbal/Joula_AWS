@@ -79,6 +79,35 @@ const mapLegacyAddress = (item: LegacyAddress): AddressRecord | null => {
   }
 }
 
+// Like mapLegacyAddress but doesn't discard records with missing/invalid coordinates
+const mapLegacyAddressForList = (item: LegacyAddress): AddressRecord => {
+  const coordinateParts = (item.Coordinates || '').split(',')
+  const latitude = coordinateParts.length === 2 ? Number(coordinateParts[0].trim()) : Number.NaN
+  const longitude = coordinateParts.length === 2 ? Number(coordinateParts[1].trim()) : Number.NaN
+
+  const addressParts = [item.H_No, item.St_Name, item.City, item.State, item.Zip]
+    .map((part) => (part || '').trim())
+    .filter(Boolean)
+
+  return {
+    id: Number(item.ID),
+    name: item.Name,
+    address: addressParts.join(' '),
+    latitude: Number.isFinite(latitude) ? latitude : undefined,
+    longitude: Number.isFinite(longitude) ? longitude : undefined,
+    city: item.City || '',
+    state: (item.State || '').trim(),
+    locality: (item.Locality || '').trim(),
+    houseNo: (item.H_No || '').trim(),
+    streetName: (item.St_Name || '').trim(),
+    zip: (item.Zip || '').trim(),
+    aptNo: (item.Apt_No || '').trim(),
+    lastVisit: item.Last_Visit || '',
+    comments: (item.Comments || '').trim(),
+    createdAt: new Date().toISOString(),
+  }
+}
+
 const mapLegacyMasjid = (item: LegacyMasjid): Masjid => {
   const coordinateParts = (item.Coordinates || '').split(',')
   const latitude = coordinateParts.length === 2 ? Number(coordinateParts[0].trim()) : Number.NaN
@@ -131,6 +160,47 @@ class ApiService {
     const response = await this.api.post<{ success: boolean; message?: string }>('/api/delete_masjid.php', { id })
     if (!response.data.success) {
       throw new Error(response.data.message || 'Failed to delete masjid')
+    }
+  }
+
+  async deleteAddress(id: number): Promise<void> {
+    const response = await this.api.post<{ success: boolean; message?: string }>('/api/delete_address.php', { id })
+    if (!response.data.success) {
+      throw new Error(response.data.message || 'Failed to delete address')
+    }
+  }
+
+  async updatePendingMasjid(
+    id: number,
+    data: {
+      name: string
+      houseNo: string
+      aptNo?: string
+      streetName: string
+      city: string
+      state: string
+      zip: string
+      coordinates?: string
+    }
+  ): Promise<void> {
+    const response = await this.api.post<{ success: boolean; message?: string }>('/api/masjid_review.php', {
+      action: 'update',
+      id,
+      ...data,
+    })
+    if (!response.data.success) {
+      throw new Error(response.data.message || 'Failed to update masjid')
+    }
+  }
+
+  async updateMyData(type: 'masjid' | 'address', id: number, fields: Record<string, string>): Promise<void> {
+    const response = await this.api.post<{ success: boolean; message?: string }>('/api/my_data_update.php', {
+      type,
+      id,
+      ...fields,
+    })
+    if (!response.data.success) {
+      throw new Error(response.data.message || 'Update failed')
     }
   }
   private api: AxiosInstance
@@ -303,9 +373,10 @@ class ApiService {
   async searchMasjidsByLocation(
     latitude: number,
     longitude: number,
-    radiusKm: number = 10
+    radiusKm: number = 10,
+    params?: { mine?: boolean }
   ): Promise<Masjid[]> {
-    const masjids = await this.getMasjids()
+    const masjids = await this.getMasjids(params)
     return masjids
       .filter((masjid) => typeof masjid.latitude === 'number' && typeof masjid.longitude === 'number')
       .map((masjid) => ({
@@ -339,6 +410,8 @@ class ApiService {
     search?: string
     limit?: number
     masjidId?: number
+    mine?: boolean
+    listAll?: boolean
   }): Promise<AddressRecord[]> {
     const response = await this.api.get<{ success: boolean; data: LegacyAddress[] }>('/api/addresses.php', {
       params: {
@@ -346,12 +419,16 @@ class ApiService {
         locality: params?.locality,
         search: params?.search,
         masjidId: params?.masjidId,
+        mine: params?.mine ? '1' : undefined,
+        listAll: params?.listAll ? '1' : undefined,
       },
     })
 
-    const mapped = (response.data.data || [])
-      .map((item) => mapLegacyAddress(item))
-      .filter((item): item is AddressRecord => item !== null)
+    const mapped = params?.listAll
+      ? (response.data.data || []).map((item) => mapLegacyAddressForList(item))
+      : (response.data.data || [])
+          .map((item) => mapLegacyAddress(item))
+          .filter((item): item is AddressRecord => item !== null)
 
     if (params?.limit && params.limit > 0) {
       return mapped.slice(0, params.limit)
@@ -363,9 +440,10 @@ class ApiService {
   async searchAddressesByLocation(
     latitude: number,
     longitude: number,
-    radiusKm: number = 10
+    radiusKm: number = 10,
+    params?: { mine?: boolean }
   ): Promise<AddressRecord[]> {
-    const addresses = await this.getAddresses()
+    const addresses = await this.getAddresses(params)
     return addresses
       .map((address) => {
         if (typeof address.latitude === 'number' && typeof address.longitude === 'number') {
@@ -421,10 +499,20 @@ class ApiService {
     }
   }
 
-  async importAddresses(file: File, masjid: string): Promise<ImportAddressesResponse> {
+  async importAddresses(
+    file: File,
+    masjid: string,
+    options?: { validateOnly?: boolean; ignoreErrors?: boolean }
+  ): Promise<ImportAddressesResponse> {
     const form = new FormData()
     form.append('file', file)
     form.append('masjid', masjid)
+    if (options?.validateOnly) {
+      form.append('validateOnly', '1')
+    }
+    if (options?.ignoreErrors) {
+      form.append('ignoreErrors', '1')
+    }
     const response = await this.api.post<ImportAddressesResponse>('/api/address_import.php', form, {
       headers: { 'Content-Type': 'multipart/form-data' },
     })
@@ -464,6 +552,69 @@ class ApiService {
     const response = await this.api.post<{ success: boolean; message?: string }>('/api/geocode_review.php', { id })
     if (!response.data.success) {
       throw new Error(response.data.message || 'Failed to approve address')
+    }
+  }
+
+  async getAddressReviewList(createdBy?: number): Promise<PendingGeocodeRecord[]> {
+    const response = await this.api.get<{ success: boolean; data: PendingGeocodeRecord[]; message?: string }>('/api/address_review.php', {
+      params: createdBy ? { createdBy } : undefined,
+    })
+    if (!response.data.success) {
+      throw new Error(response.data.message || 'Failed to load address review list')
+    }
+    return response.data.data || []
+  }
+
+  async getMyPendingAddresses(): Promise<PendingGeocodeRecord[]> {
+    const response = await this.api.get<{ success: boolean; data: PendingGeocodeRecord[]; message?: string }>('/api/my_pending_addresses.php')
+    if (!response.data.success) {
+      throw new Error(response.data.message || 'Failed to load pending addresses')
+    }
+    return response.data.data || []
+  }
+
+  async approveAddress(id: number): Promise<void> {
+    const response = await this.api.post<{ success: boolean; message?: string }>('/api/address_review.php', { id })
+    if (!response.data.success) {
+      throw new Error(response.data.message || 'Failed to approve address')
+    }
+  }
+
+  async approveAllAddresses(): Promise<number> {
+    const response = await this.api.post<{ success: boolean; message?: string; approvedCount?: number }>('/api/address_review.php', {
+      action: 'approve_all',
+    })
+    if (!response.data.success) {
+      throw new Error(response.data.message || 'Failed to approve all addresses')
+    }
+    return Number(response.data.approvedCount || 0)
+  }
+
+  async updatePendingAddress(
+    id: number,
+    data: {
+      name: string
+      houseNo: string
+      aptNo?: string
+      streetName: string
+      city: string
+      state: string
+      zip: string
+      locality?: string
+      comments?: string
+      lastVisit?: string
+      masjid?: string
+      verified?: 'Y' | 'N'
+      coordinates?: string
+    }
+  ): Promise<void> {
+    const response = await this.api.post<{ success: boolean; message?: string }>('/api/address_review.php', {
+      action: 'update',
+      id,
+      ...data,
+    })
+    if (!response.data.success) {
+      throw new Error(response.data.message || 'Failed to update address')
     }
   }
 
@@ -666,6 +817,16 @@ class ApiService {
     })
     if (!response.data.success) {
       throw new Error(response.data.message || 'Failed to create team user')
+    }
+  }
+
+  // ---------------------------------------------------------------
+  // Free User Creation (super admin only)
+  // ---------------------------------------------------------------
+  async createFreeUser(data: { username: string; email: string; password: string; phone?: string }): Promise<void> {
+    const response = await this.api.post<{ success: boolean; message?: string }>('/api/create_free_user.php', data)
+    if (!response.data.success) {
+      throw new Error(response.data.message || 'Failed to create free user')
     }
   }
 }

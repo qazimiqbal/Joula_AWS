@@ -1,10 +1,12 @@
-import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate } from 'react-router-dom'
+import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom'
 import {
   AppBar, Box, Toolbar, Typography, Container,
-  Paper, Button,
+  Paper, Button, Menu, MenuItem,
 } from '@mui/material'
-import HomeIcon from '@mui/icons-material/Home'
-import PersonIcon from '@mui/icons-material/Person'
+import { useState } from 'react'
+import type { MouseEvent } from 'react'
+import ArrowBackIcon from '@mui/icons-material/ArrowBack'
+import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown'
 import RefreshIcon from '@mui/icons-material/Refresh'
 import LogoutIcon from '@mui/icons-material/Logout'
 import { AuthProvider, useAuth } from './context/AuthContext'
@@ -17,6 +19,7 @@ import EnterComments from './pages/EnterComments'
 import AccountSettings from './pages/AccountSettings'
 import PendingUsers from './pages/PendingUsers'
 import PendingMasjids from './pages/PendingMasjids'
+import PendingAddresses from './pages/PendingAddresses'
 import AddAddress from './pages/AddAddress'
 import AddMasjid from './pages/AddMasjid'
 import AddressImport from './pages/AddressImport'
@@ -26,9 +29,11 @@ import BillingPage from './pages/BillingPage'
 import OrgUsersPage from './pages/OrgUsersPage'
 import OrgUserDetailsPage from './pages/OrgUserDetailsPage'
 import BuildTeamPage from './pages/BuildTeamPage'
+import CreateFreeUser from './pages/CreateFreeUser'
 import ViewUsers from './pages/ViewUsers'
 import AdminUserMasjids from './pages/AdminUserMasjids'
 import AdminUserTeam from './pages/AdminUserTeam'
+import AllAddresses from './pages/AllAddresses'
 import PrivateRoute from './components/PrivateRoute'
 import SubscriptionGuard from './components/SubscriptionGuard'
 import SubscriptionBanner from './components/SubscriptionBanner'
@@ -36,16 +41,54 @@ import './App.css'
 
 function AppHeader() {
   const navigate = useNavigate()
+  const location = useLocation()
   const { isAuthenticated, user } = useAuth()
+  const [userMenuAnchor, setUserMenuAnchor] = useState<null | HTMLElement>(null)
+  const showBack = isAuthenticated && location.pathname !== '/dashboard' && location.pathname !== '/login'
+  const userMenuOpen = Boolean(userMenuAnchor)
+
+  const handleOpenUserMenu = (event: MouseEvent<HTMLElement>) => {
+    setUserMenuAnchor(event.currentTarget)
+  }
+
+  const handleCloseUserMenu = () => {
+    setUserMenuAnchor(null)
+  }
+
+  const handleGoToAccount = () => {
+    handleCloseUserMenu()
+    navigate('/account')
+  }
 
   return (
     <AppBar position="static" sx={{ bgcolor: 'black' }}>
-      <Toolbar>
+      <Toolbar sx={{ px: 1 }}>
+        {/* Left: Back button */}
+        <Box sx={{ width: 90, display: 'flex', alignItems: 'center' }}>
+          {showBack && (
+            <Button
+              startIcon={<ArrowBackIcon />}
+              onClick={() => {
+                if (window.history.length > 1) {
+                  navigate(-1)
+                } else {
+                  navigate('/dashboard')
+                }
+              }}
+              sx={{ color: 'white', textTransform: 'none', minWidth: 0, px: 1 }}
+            >
+              Back
+            </Button>
+          )}
+        </Box>
+
+        {/* Center: Title */}
         <Typography
           variant="h6"
           component="div"
           sx={{
             flexGrow: 1,
+            textAlign: 'center',
             cursor: isAuthenticated ? 'pointer' : 'default',
             '&:hover': isAuthenticated ? { opacity: 0.8 } : {},
           }}
@@ -53,11 +96,37 @@ function AppHeader() {
         >
           Joula Dashboard
         </Typography>
-        {isAuthenticated && user && (
-          <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.7)' }}>
-            Welcome, {user.name}
-          </Typography>
-        )}
+
+        {/* Right: Welcome dropdown */}
+        <Box sx={{ width: 180, display: 'flex', justifyContent: 'flex-end' }}>
+          {isAuthenticated && user && (
+            <>
+              <Button
+                onClick={handleOpenUserMenu}
+                endIcon={<ArrowDropDownIcon />}
+                sx={{
+                  color: 'rgba(255,255,255,0.9)',
+                  textTransform: 'none',
+                  maxWidth: 180,
+                  justifyContent: 'flex-end',
+                }}
+              >
+                <Typography variant="caption" noWrap>
+                  Welcome, {user.name}
+                </Typography>
+              </Button>
+              <Menu
+                anchorEl={userMenuAnchor}
+                open={userMenuOpen}
+                onClose={handleCloseUserMenu}
+                anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+                transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+              >
+                <MenuItem onClick={handleGoToAccount}>Account Settings</MenuItem>
+              </Menu>
+            </>
+          )}
+        </Box>
       </Toolbar>
     </AppBar>
   )
@@ -79,16 +148,6 @@ function AppFooter() {
         bgcolor: 'black', display: 'flex', justifyContent: 'center', gap: 1, py: 0.5,
       }}
     >
-      <Button
-        startIcon={<HomeIcon />}
-        onClick={() => navigate('/dashboard')}
-        sx={{ color: 'white', textTransform: 'none' }}
-      >Home</Button>
-      <Button
-        startIcon={<PersonIcon />}
-        onClick={() => navigate('/profile')}
-        sx={{ color: 'white', textTransform: 'none' }}
-      >Profile</Button>
       <Button
         startIcon={<RefreshIcon />}
         onClick={() => window.location.reload()}
@@ -186,7 +245,9 @@ function App() {
                   path="/addresses/new"
                   element={
                     <PrivateRoute>
-                      <AddAddress />
+                      <SubscriptionGuard>
+                        <AddAddress />
+                      </SubscriptionGuard>
                     </PrivateRoute>
                   }
                 />
@@ -202,7 +263,9 @@ function App() {
                   path="/address-import"
                   element={
                     <PrivateRoute>
-                      <AddressImport />
+                      <SubscriptionGuard>
+                        <AddressImport />
+                      </SubscriptionGuard>
                     </PrivateRoute>
                   }
                 />
@@ -263,10 +326,26 @@ function App() {
                   }
                 />
                 <Route
+                  path="/create-free-user"
+                  element={
+                    <PrivateRoute>
+                      <CreateFreeUser />
+                    </PrivateRoute>
+                  }
+                />
+                <Route
                   path="/pending-masjids"
                   element={
                     <PrivateRoute>
                       <PendingMasjids />
+                    </PrivateRoute>
+                  }
+                />
+                <Route
+                  path="/pending-addresses"
+                  element={
+                    <PrivateRoute>
+                      <PendingAddresses />
                     </PrivateRoute>
                   }
                 />
@@ -291,6 +370,14 @@ function App() {
                   element={
                     <PrivateRoute>
                       <AdminUserTeam />
+                    </PrivateRoute>
+                  }
+                />
+                <Route
+                  path="/admin/all-addresses"
+                  element={
+                    <PrivateRoute>
+                      <AllAddresses />
                     </PrivateRoute>
                   }
                 />

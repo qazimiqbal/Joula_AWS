@@ -196,16 +196,18 @@ $hasOrgId = has_column($con, $db, $loginTable, 'org_id');
 $hasOrgRole = has_column($con, $db, $loginTable, 'org_role');
 $hasPhone = has_column($con, $db, $loginTable, 'phone');
 $hasPermissions = has_column($con, $db, $loginTable, 'Permissions');
+$hasFreeUser = has_column($con, $db, $loginTable, 'is_free_user');
 
 $phoneExpr = $hasPhone ? 'phone' : "'' AS phone";
 $permissionsExpr = $hasPermissions ? 'Permissions' : "'' AS Permissions";
 $orgIdExpr = $hasOrgId ? 'org_id' : '0 AS org_id';
 $orgRoleExpr = $hasOrgRole ? "org_role" : "'viewer' AS org_role";
+$freeUserExpr = $hasFreeUser ? 'is_free_user' : '0 AS is_free_user';
 
 $whereStatus = $hasStatus ? "status = 'true' AND " : "";
 
 // Schema-adaptive login query for Joula_AWS (works with and without subscription columns).
-$sql = "SELECT id, username, email, $phoneExpr, $permissionsExpr, $orgIdExpr, $orgRoleExpr FROM `$loginTable` WHERE $whereStatus (username = ? OR username = ? OR email = ?) AND password = MD5(?) LIMIT 1";
+$sql = "SELECT id, username, email, $phoneExpr, $permissionsExpr, $orgIdExpr, $orgRoleExpr, $freeUserExpr FROM `$loginTable` WHERE $whereStatus (username = ? OR username = ? OR email = ?) AND password = MD5(?) LIMIT 1";
 $stmt = mysqli_prepare($con, $sql);
 if (!$stmt) {
     respond(500, array('success' => false, 'message' => 'Failed to prepare login query: ' . mysqli_error($con)));
@@ -214,7 +216,7 @@ if (!$stmt) {
 $userRow = null;
 mysqli_stmt_bind_param($stmt, 'ssss', $identifier, $usernameCandidate, $identifier, $password);
 mysqli_stmt_execute($stmt);
-mysqli_stmt_bind_result($stmt, $id, $username, $email, $phone, $permissionsRaw, $orgId, $orgRole);
+mysqli_stmt_bind_result($stmt, $id, $username, $email, $phone, $permissionsRaw, $orgId, $orgRole, $isFreeUserRaw);
 if (mysqli_stmt_fetch($stmt)) {
     $userRow = array(
         'id' => $id,
@@ -224,6 +226,7 @@ if (mysqli_stmt_fetch($stmt)) {
         'Permissions' => $permissionsRaw,
         'org_id' => $orgId,
         'org_role' => $orgRole,
+        'is_free_user' => $isFreeUserRaw,
     );
 }
 mysqli_stmt_close($stmt);
@@ -292,6 +295,7 @@ $user = array(
     'role' => $role,
     'permissionLevel' => $permissions,
     'orgRole' => $userRow['org_role'] ?? 'viewer',
+    'isFreeUser' => !empty($userRow['is_free_user']),
     'createdAt' => date('c')
 );
 

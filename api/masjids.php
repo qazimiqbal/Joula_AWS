@@ -15,18 +15,47 @@ function get_authenticated_user($con) {
     $token = substr($authHeader, 7);
 
     $stmt = mysqli_prepare($con,
-        "SELECT id, org_id
+        "SELECT id, org_id, Permissions
          FROM Login_user_AWS
          WHERE auth_token = ? AND status = 'true' LIMIT 1");
     if (!$stmt) return null;
     mysqli_stmt_bind_param($stmt, 's', $token);
     mysqli_stmt_execute($stmt);
-    $userId = $orgId = null;
-    mysqli_stmt_bind_result($stmt, $userId, $orgId);
+    $userId = $orgId = $permissions = null;
+    mysqli_stmt_bind_result($stmt, $userId, $orgId, $permissions);
     $found = mysqli_stmt_fetch($stmt);
     mysqli_stmt_close($stmt);
     if (!$found || !$userId) return null;
-    return ['id' => intval($userId), 'org_id' => intval($orgId)];
+    return ['id' => intval($userId), 'org_id' => intval($orgId), 'permission_level' => intval($permissions)];
+}
+
+function resolve_effective_owner_id($con, $userId, $orgId, $permissionLevel) {
+    if ($permissionLevel >= 3 || $orgId <= 0) {
+        return intval($userId);
+    }
+
+    $safeOrg = intval($orgId);
+    $ownerRes = mysqli_query(
+        $con,
+        "SELECT id
+         FROM Login_user_AWS
+         WHERE org_id = $safeOrg
+           AND status = 'true'
+           AND (org_role = 'org_admin' OR org_role = 'admin' OR Permissions = '3' OR Permissions = '4')
+         ORDER BY
+             CASE
+                 WHEN org_role = 'org_admin' THEN 0
+                 WHEN org_role = 'admin' THEN 1
+                 ELSE 2
+             END,
+             id ASC
+         LIMIT 1"
+    );
+    if (!$ownerRes) return intval($userId);
+    $ownerRow = mysqli_fetch_assoc($ownerRes);
+    mysqli_free_result($ownerRes);
+
+    return ($ownerRow && $ownerRow['id']) ? intval($ownerRow['id']) : intval($userId);
 }
 
 $state = isset($_GET['state']) ? trim($_GET['state']) : '';
@@ -64,9 +93,10 @@ if ($includeOwnPending && $me && $createdBy > 0 && intval($me['id']) === $create
 $sql .= ")";
 
 if ($mine && $me) {
+    $effectiveOwnerId = resolve_effective_owner_id($con, $me['id'], $me['org_id'], $me['permission_level']);
     $sql .= " AND m.Created_by = ?";
     $types .= 'i';
-    $params[] = intval($me['id']);
+    $params[] = $effectiveOwnerId;
 }
 
 

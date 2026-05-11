@@ -88,16 +88,78 @@ function permission_to_level($permissionRaw) {
         return 0;
 }
 
+function enforce_address_access($con, $permissionLevel, $orgId, $isFreeUser = false) {
+    if ($permissionLevel < 2) {
+        http_response_code(403);
+        echo json_encode(array('success' => false, 'message' => 'Only admins and editors can add addresses'));
+        exit;
+    }
+
+    if ($permissionLevel >= 4) {
+        return;
+    }
+
+    // Free users created by super admin bypass subscription checks
+    if ($isFreeUser) {
+        return;
+    }
+
+    if ($orgId <= 0) {
+        http_response_code(403);
+        echo json_encode(array('success' => false, 'message' => 'Organization subscription is required'));
+        exit;
+    }
+
+    $safeOrgId = intval($orgId);
+    $subResult = mysqli_query($con, "SELECT plan_status, trial_ends_at FROM organizations WHERE id = $safeOrgId LIMIT 1");
+    if (!$subResult) {
+        // Cannot verify subscription — allow access
+        return;
+    }
+    $subRow = mysqli_fetch_assoc($subResult);
+    mysqli_free_result($subResult);
+
+    if (!$subRow) {
+        http_response_code(403);
+        echo json_encode(array('success' => false, 'message' => 'Organization subscription is required'));
+        exit;
+    }
+
+    $planStatus  = $subRow['plan_status'];
+    $trialEndsAt = $subRow['trial_ends_at'];
+    $normalized  = strtolower(trim((string)$planStatus));
+
+    if ($normalized === 'trial') {
+        try {
+            $now      = new DateTime('now', new DateTimeZone('UTC'));
+            $trialEnd = new DateTime((string)$trialEndsAt, new DateTimeZone('UTC'));
+            if ($now > $trialEnd) {
+                mysqli_query($con, "UPDATE organizations SET plan_status = 'expired' WHERE id = $safeOrgId");
+                $normalized = 'expired';
+            }
+        } catch (Exception $e) {
+            $normalized = 'expired';
+        }
+    }
+
+    if ($normalized !== 'active' && $normalized !== 'trial') {
+        http_response_code(403);
+        echo json_encode(array('success' => false, 'message' => 'Active subscription required to add addresses'));
+        exit;
+    }
+}
+
 function resolve_effective_owner_id($con, $userId, $orgId, $permissionLevel) {
         if ($permissionLevel >= 3 || $orgId <= 0) {
                 return intval($userId);
         }
 
-        $ownerStmt = mysqli_prepare(
+        $safeOrg = intval($orgId);
+        $ownerRes = mysqli_query(
                 $con,
                 "SELECT id
                  FROM Login_user_AWS
-                 WHERE org_id = ?
+                 WHERE org_id = $safeOrg
                      AND status = 'true'
                      AND (org_role = 'org_admin' OR org_role = 'admin' OR Permissions = '3' OR Permissions = '4')
                  ORDER BY
@@ -109,37 +171,38 @@ function resolve_effective_owner_id($con, $userId, $orgId, $permissionLevel) {
                      id ASC
                  LIMIT 1"
         );
-        if (!$ownerStmt) return intval($userId);
-        mysqli_stmt_bind_param($ownerStmt, 'i', $orgId);
-        mysqli_stmt_execute($ownerStmt);
-        $ownerId = null;
-        mysqli_stmt_bind_result($ownerStmt, $ownerId);
-        $found = mysqli_stmt_fetch($ownerStmt);
-        mysqli_stmt_close($ownerStmt);
+        if (!$ownerRes) return intval($userId);
+        $ownerRow = mysqli_fetch_assoc($ownerRes);
+        mysqli_free_result($ownerRes);
 
-        return ($found && $ownerId) ? intval($ownerId) : intval($userId);
+        return ($ownerRow && $ownerRow['id']) ? intval($ownerRow['id']) : intval($userId);
 }
 
 
 // Resolve uploaded_by from Bearer token.
 $uploadedBy = null;
 $uploadedByOrgId = 0;
+$permissionLevel = 0;
+$isFreeUser = false;
 $authHeader = isset($_SERVER['HTTP_AUTHORIZATION']) ? $_SERVER['HTTP_AUTHORIZATION'] : '';
 if (strpos($authHeader, 'Bearer ') === 0) {
     $token = substr($authHeader, 7);
-    $stmtU = mysqli_prepare($con, "SELECT id, org_id, Permissions FROM Login_user_AWS WHERE auth_token = ? AND status = 'true' LIMIT 1");
-    if ($stmtU) {
-        mysqli_stmt_bind_param($stmtU, 's', $token);
-        mysqli_stmt_execute($stmtU);
-        $tmpId = $tmpOrgId = null;
-        $tmpPermissions = null;
-        mysqli_stmt_bind_result($stmtU, $tmpId, $tmpOrgId, $tmpPermissions);
-        if (mysqli_stmt_fetch($stmtU)) {
-            $permissionLevel = permission_to_level($tmpPermissions);
-            $uploadedBy = resolve_effective_owner_id($con, intval($tmpId), intval($tmpOrgId), $permissionLevel);
-            $uploadedByOrgId = intval($tmpOrgId);
+    $tokenEsc = mysqli_real_escape_string($con, $token);
+    // Check if is_free_user column exists
+    $freeColCheck = mysqli_query($con, "SHOW COLUMNS FROM Login_user_AWS LIKE 'is_free_user'");
+    $hasFreeCol = ($freeColCheck && mysqli_num_rows($freeColCheck) > 0);
+    if ($freeColCheck) mysqli_free_result($freeColCheck);
+    $selectFree = $hasFreeCol ? ', is_free_user' : '';
+    $resU = mysqli_query($con, "SELECT id, org_id, Permissions{$selectFree} FROM Login_user_AWS WHERE auth_token = '{$tokenEsc}' AND status = 'true' LIMIT 1");
+    if ($resU) {
+        $rowU = mysqli_fetch_assoc($resU);
+        mysqli_free_result($resU);
+        if ($rowU) {
+            $permissionLevel = permission_to_level($rowU['Permissions']);
+            $isFreeUser = $hasFreeCol && !empty($rowU['is_free_user']);
+            $uploadedBy = resolve_effective_owner_id($con, intval($rowU['id']), intval($rowU['org_id']), $permissionLevel);
+            $uploadedByOrgId = intval($rowU['org_id']);
         }
-        mysqli_stmt_close($stmtU);
     }
 }
 
@@ -148,6 +211,8 @@ if ($uploadedBy === null) {
     echo json_encode(array('success' => false, 'message' => 'Unauthorized'));
     exit;
 }
+
+enforce_address_access($con, $permissionLevel, $uploadedByOrgId, $isFreeUser);
 
 
 $input = json_decode(file_get_contents('php://input'), true);
@@ -169,10 +234,22 @@ $verified = isset($input['verified']) ? trim($input['verified']) : 'N';
 $masjid = isset($input['masjid']) ? trim($input['masjid']) : '';
 $lastVisit = isset($input['lastVisit']) ? trim($input['lastVisit']) : date('Y-m-d');
 $comments = isset($input['comments']) ? trim($input['comments']) : '';
+$coordinatesInput = isset($input['coordinates']) ? trim((string)$input['coordinates']) : '';
 $latitude = isset($input['latitude']) ? trim((string)$input['latitude']) : '';
 $longitude = isset($input['longitude']) ? trim((string)$input['longitude']) : '';
 
-$hasCoordinates = ($latitude !== '' && $longitude !== '');
+if ($locality === '') {
+    $locality = 'Unassigned';
+}
+
+// Only strip coordinates if user cannot see/enter them (permission < 2)
+if ($permissionLevel < 2) {
+    $coordinatesInput = '';
+    $latitude = '';
+    $longitude = '';
+}
+
+$hasCoordinates = ($coordinatesInput !== '' || ($latitude !== '' && $longitude !== ''));
 
 if ($name === '') {
     http_response_code(400);
@@ -180,7 +257,7 @@ if ($name === '') {
     exit;
 }
 
-if (!$hasCoordinates && ($houseNo === '' || $streetName === '' || $city === '' || $state === '' || $zip === '' || $locality === '')) {
+if (!$hasCoordinates && ($houseNo === '' || $streetName === '' || $city === '' || $state === '' || $zip === '')) {
     http_response_code(400);
     echo json_encode(array('success' => false, 'message' => 'Provide full address fields, or include coordinates from current location'));
     exit;
@@ -198,26 +275,35 @@ if ($hasCoordinates) {
     if ($city === '') $city = 'Unknown';
     if ($state === '') $state = 'GA';
     if ($zip === '') $zip = '00000';
-    if ($locality === '') $locality = 'Unassigned';
 }
 
-$masjidStmt = mysqli_prepare($con, 'SELECT m.ID
-    FROM Masjids_AWS m
-    INNER JOIN Login_user_AWS owner ON owner.id = m.Created_by
-    WHERE m.Name = ?
-      AND COALESCE(m.`Clear`, 1) = 1
-      AND (m.Created_by = ? OR (? > 0 AND owner.org_id = ?))
-    LIMIT 1');
-if (!$masjidStmt) {
-    http_response_code(500);
-    echo json_encode(array('success' => false, 'message' => 'Failed to validate masjid', 'error' => mysqli_error($con)));
-    exit;
+// Super admin can use any approved masjid; others are restricted to their own/org masjids
+$masjidEscaped = mysqli_real_escape_string($con, $masjid);
+$safeUploadedBy = intval($uploadedBy);
+$safeOrgId2 = intval($uploadedByOrgId);
+
+if ($permissionLevel >= 4) {
+    $masjidSql = "SELECT ID FROM Masjids_AWS WHERE Name = '{$masjidEscaped}' AND COALESCE(`Clear`, 1) = 1 LIMIT 1";
+} else {
+    $masjidSql = "SELECT m.ID
+        FROM Masjids_AWS m
+        INNER JOIN Login_user_AWS owner ON owner.id = m.Created_by
+        WHERE m.Name = '{$masjidEscaped}'
+          AND COALESCE(m.`Clear`, 1) = 1
+          AND (m.Created_by = $safeUploadedBy OR ($safeOrgId2 > 0 AND owner.org_id = $safeOrgId2))
+        LIMIT 1";
 }
-mysqli_stmt_bind_param($masjidStmt, 'siii', $masjid, $uploadedBy, $uploadedByOrgId, $uploadedByOrgId);
-mysqli_stmt_execute($masjidStmt);
-mysqli_stmt_bind_result($masjidStmt, $masjidId);
-$hasApprovedMasjid = mysqli_stmt_fetch($masjidStmt);
-mysqli_stmt_close($masjidStmt);
+$masjidResult = mysqli_query($con, $masjidSql);
+$hasApprovedMasjid = false;
+$masjidId = null;
+if ($masjidResult) {
+    $masjidRow = mysqli_fetch_assoc($masjidResult);
+    if ($masjidRow) {
+        $hasApprovedMasjid = true;
+        $masjidId = $masjidRow['ID'];
+    }
+    mysqli_free_result($masjidResult);
+}
 
 if (!$hasApprovedMasjid) {
     http_response_code(400);
@@ -226,26 +312,13 @@ if (!$hasApprovedMasjid) {
 }
 
 
-$checkStmt = mysqli_prepare($con, 'SELECT ID FROM Addresses_AWS WHERE Name = ? AND H_No = ? LIMIT 1');
+$nameEscDup   = mysqli_real_escape_string($con, $name);
+$houseEscDup  = mysqli_real_escape_string($con, $houseNo);
+$dupRes = mysqli_query($con, "SELECT ID FROM Addresses_AWS WHERE Name = '{$nameEscDup}' AND H_No = '{$houseEscDup}' LIMIT 1");
 $exists = false;
-if ($checkStmt) {
-    mysqli_stmt_bind_param($checkStmt, 'ss', $name, $houseNo);
-    mysqli_stmt_execute($checkStmt);
-    mysqli_stmt_bind_result($checkStmt, $existingId);
-    $exists = mysqli_stmt_fetch($checkStmt);
-    mysqli_stmt_close($checkStmt);
-} else {
-    $nameEsc = mysqli_real_escape_string($con, $name);
-    $houseEsc = mysqli_real_escape_string($con, $houseNo);
-    $dupSql = "SELECT ID FROM Addresses_AWS WHERE Name = '{$nameEsc}' AND H_No = '{$houseEsc}' LIMIT 1";
-    $dupRes = mysqli_query($con, $dupSql);
-    if ($dupRes === false) {
-        error_log('Address duplicate check failed; continuing with insert fallback. Error: ' . mysqli_error($con));
-        $exists = false;
-    } else {
-        $exists = mysqli_num_rows($dupRes) > 0;
-        mysqli_free_result($dupRes);
-    }
+if ($dupRes !== false) {
+    $exists = mysqli_num_rows($dupRes) > 0;
+    mysqli_free_result($dupRes);
 }
 
 if ($exists) {
@@ -255,56 +328,16 @@ if ($exists) {
 }
 
 $coordinates = '';
-if ($latitude !== '' && $longitude !== '') {
+if ($coordinatesInput !== '') {
+    $coordinates = $coordinatesInput;
+} elseif ($latitude !== '' && $longitude !== '') {
     $coordinates = $latitude . ',' . $longitude;
 }
 
-$area = 'unclassified';
-$status = 'Muslim';
 $clear = 0;
 
 
-$stmt = mysqli_prepare(
-    $con,
-    'INSERT INTO Addresses_AWS (Name, Halaqa, H_No, Apt_No, St_Name, City, State, Zip, Verified, Masjid, Comments, Last_Visit, Coordinates, Locality, Area, Status, `Clear`, uploaded_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-);
-
-if ($stmt) {
-    mysqli_stmt_bind_param(
-        $stmt,
-        'ssssssssssssssssii',
-        $name,
-        $halaqa,
-        $houseNo,
-        $aptNo,
-        $streetName,
-        $city,
-        $state,
-        $zip,
-        $verified,
-        $masjid,
-        $comments,
-        $lastVisit,
-        $coordinates,
-        $locality,
-        $area,
-        $status,
-        $clear,
-        $uploadedBy
-    );
-
-    if (!mysqli_stmt_execute($stmt)) {
-        $errorMsg = mysqli_error($con);
-        mysqli_stmt_close($stmt);
-        http_response_code(500);
-        echo json_encode(array('success' => false, 'message' => 'Failed to create address', 'error' => $errorMsg));
-        exit;
-    }
-
-    mysqli_stmt_close($stmt);
-    echo json_encode(array('success' => true, 'message' => 'Address created successfully'));
-    exit;
-}
+// Use plain mysqli_query with escaped values (avoids GoDaddy prepared-statement issues)
 
 $nameEsc = mysqli_real_escape_string($con, $name);
 $halaqaEsc = mysqli_real_escape_string($con, $halaqa);
@@ -320,12 +353,10 @@ $commentsEsc = mysqli_real_escape_string($con, $comments);
 $lastVisitEsc = mysqli_real_escape_string($con, $lastVisit);
 $coordinatesEsc = mysqli_real_escape_string($con, $coordinates);
 $localityEsc = mysqli_real_escape_string($con, $locality);
-$areaEsc = mysqli_real_escape_string($con, $area);
-$statusEsc = mysqli_real_escape_string($con, $status);
 $clearInt = intval($clear);
 $uploadedByInt = intval($uploadedBy);
 
-$insertSql = "INSERT INTO Addresses_AWS (Name, Halaqa, H_No, Apt_No, St_Name, City, State, Zip, Verified, Masjid, Comments, Last_Visit, Coordinates, Locality, Area, Status, `Clear`, uploaded_by) VALUES ('{$nameEsc}', '{$halaqaEsc}', '{$houseEsc}', '{$aptEsc}', '{$streetEsc}', '{$cityEsc}', '{$stateEsc}', '{$zipEsc}', '{$verifiedEsc}', '{$masjidEsc}', '{$commentsEsc}', '{$lastVisitEsc}', '{$coordinatesEsc}', '{$localityEsc}', '{$areaEsc}', '{$statusEsc}', {$clearInt}, {$uploadedByInt})";
+$insertSql = "INSERT INTO Addresses_AWS (Name, Halaqa, H_No, Apt_No, St_Name, City, State, Zip, Verified, Masjid, Comments, Last_Visit, Coordinates, Locality, `Clear`, uploaded_by) VALUES ('{$nameEsc}', '{$halaqaEsc}', '{$houseEsc}', '{$aptEsc}', '{$streetEsc}', '{$cityEsc}', '{$stateEsc}', '{$zipEsc}', '{$verifiedEsc}', '{$masjidEsc}', '{$commentsEsc}', '{$lastVisitEsc}', '{$coordinatesEsc}', '{$localityEsc}', {$clearInt}, {$uploadedByInt})";
 $ok = mysqli_query($con, $insertSql);
 if ($ok === false) {
     http_response_code(500);

@@ -19,11 +19,19 @@ import apiService from '@services/api'
 import { useAuth } from '@/context/AuthContext'
 import { Masjid } from '@/types'
 
-const CSV_HEADERS = ['name','houseNo','aptNo','streetName','city','state','zip','locality','comments','lastVisit','halaqa']
-const CSV_SAMPLE   = ['John Smith','123','','Maple St','Atlanta','GA','30301','Eastside','','','' ]
+const CSV_HEADERS = ['name','houseNo','aptNo','streetName','city','state','zip','locality','comments','lastVisit','masjid','coordinates','verified']
+const CSV_SAMPLE   = ['John Smith','123','','Maple St','Atlanta','GA','30301','Eastside','','','Omar','33.7490,-84.3880','N' ]
+
+function toCsvCell(value: string) {
+  const normalized = value ?? ''
+  if (/[",\r\n]/.test(normalized)) {
+    return `"${normalized.replace(/"/g, '""')}"`
+  }
+  return normalized
+}
 
 function downloadTemplate() {
-  const csv = [CSV_HEADERS, CSV_SAMPLE].map((r) => r.join(',')).join('\r\n')
+  const csv = [CSV_HEADERS, CSV_SAMPLE].map((row) => row.map((value) => toCsvCell(value)).join(',')).join('\r\n')
   const blob = new Blob([csv], { type: 'text/csv' })
   const url  = URL.createObjectURL(blob)
   const a    = document.createElement('a')
@@ -37,9 +45,19 @@ const todayStr = () => new Date().toISOString().split('T')[0]
 
 const AddAddress: React.FC = () => {
   const navigate = useNavigate()
-  const { user } = useAuth()
+  const { user, subscription } = useAuth()
   const permissionLevel = user?.permissionLevel ?? (user?.role === 'admin' ? 3 : 1)
   const isSuperAdmin = permissionLevel >= 4
+  const canSeeCoordinates = permissionLevel >= 2
+  const canGeocode = isSuperAdmin
+  const canUseCoordinates = isSuperAdmin
+  const canUseCurrentLocation = permissionLevel >= 2
+  const isBlockedBySubscription = !isSuperAdmin && (
+    !subscription ||
+    subscription.planStatus === 'expired' ||
+    subscription.planStatus === 'cancelled' ||
+    subscription.planStatus === 'past_due'
+  )
   const [loading, setLoading] = useState(false)
   const [geocoding, setGeocoding] = useState(false)
   const [locating, setLocating] = useState(false)
@@ -66,10 +84,21 @@ const AddAddress: React.FC = () => {
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  useEffect(() => {
+    if (permissionLevel < 2) {
+      navigate('/dashboard', { replace: true })
+      return
+    }
+    if (isBlockedBySubscription) {
+      navigate('/billing', { replace: true })
+    }
+  }, [isBlockedBySubscription, navigate, permissionLevel])
+
   const updateField = (field: string, value: string, markAsManualEdit: boolean = true) => {
     setForm((prev) => ({ ...prev, [field]: value }))
 
     if (
+      canUseCoordinates &&
       markAsManualEdit &&
       (field === 'houseNo' || field === 'aptNo' || field === 'streetName' || field === 'city' || field === 'state' || field === 'zip') &&
       form.latitude.trim() !== '' &&
@@ -87,6 +116,7 @@ const AddAddress: React.FC = () => {
   }, [])
 
   const geocodeAddress = useCallback(async (f: typeof form) => {
+    if (!canUseCoordinates) return
     const query = buildAddressQuery(f)
     // Need at least house number + street + city to geocode meaningfully
     if (!f.houseNo.trim() || !f.streetName.trim() || !f.city.trim()) return
@@ -105,10 +135,14 @@ const AddAddress: React.FC = () => {
     } finally {
       setGeocoding(false)
     }
-  }, [buildAddressQuery])
+  }, [buildAddressQuery, canUseCoordinates])
 
   // Auto-geocode with 800ms debounce whenever address fields change
   useEffect(() => {
+    if (!canUseCoordinates) {
+      setNeedsRegeocode(false)
+      return
+    }
     if (debounceRef.current) clearTimeout(debounceRef.current)
     debounceRef.current = setTimeout(() => {
       geocodeAddress(form)
@@ -118,7 +152,7 @@ const AddAddress: React.FC = () => {
     }
     // Only re-run when address-relevant fields change
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form.houseNo, form.aptNo, form.streetName, form.city, form.state, form.zip])
+  }, [canUseCoordinates, form.houseNo, form.aptNo, form.streetName, form.city, form.state, form.zip])
 
   useEffect(() => {
     if (!user?.id) {
@@ -133,7 +167,7 @@ const AddAddress: React.FC = () => {
         setOwnedMasjids(masjids)
         setForm((prev) => ({
           ...prev,
-          masjid: prev.masjid || masjids[0]?.name || '',
+          masjid: prev.masjid || '',
         }))
       })
       .catch(() => {
@@ -145,6 +179,7 @@ const AddAddress: React.FC = () => {
   }, [isSuperAdmin, user?.id])
 
   const handleUseCurrentLocation = () => {
+    if (!canUseCurrentLocation) return
     setError('')
     if (!navigator.geolocation) {
       setError('Geolocation is not supported by your browser.')
@@ -156,6 +191,7 @@ const AddAddress: React.FC = () => {
       async (position) => {
         const lat = position.coords.latitude
         const lng = position.coords.longitude
+        // All users with canSeeCoordinates (permission >= 2) get lat/lng populated
         setForm((prev) => ({
           ...prev,
           latitude: lat.toFixed(6),
@@ -176,7 +212,7 @@ const AddAddress: React.FC = () => {
           }))
           setNeedsRegeocode(false)
         } catch {
-          // Keep coordinates even if reverse geocode returns no address
+          setError('Could not auto-fill address fields from your location. Please enter address fields manually.')
         } finally {
           setLocating(false)
         }
@@ -194,14 +230,13 @@ const AddAddress: React.FC = () => {
     setError('')
     setSuccess('')
 
-    const hasCoordinates = form.latitude.trim() !== '' && form.longitude.trim() !== ''
+    const hasCoordinates = canSeeCoordinates && form.latitude.trim() !== '' && form.longitude.trim() !== ''
     const hasFullAddress =
       form.houseNo.trim() !== '' &&
       form.streetName.trim() !== '' &&
       form.city.trim() !== '' &&
       form.state.trim() !== '' &&
-      form.zip.trim() !== '' &&
-      form.locality.trim() !== ''
+      form.zip.trim() !== ''
 
     if (!form.name.trim()) {
       setError('Name is required.')
@@ -209,7 +244,9 @@ const AddAddress: React.FC = () => {
     }
 
     if (!hasFullAddress && !hasCoordinates) {
-      setError('Provide full address fields, or use current location to capture coordinates.')
+      setError(canSeeCoordinates
+        ? 'Provide full address fields, or use current location to capture coordinates.'
+        : 'Provide all required address fields before submitting.')
       return
     }
 
@@ -220,6 +257,10 @@ const AddAddress: React.FC = () => {
 
     setLoading(true)
     try {
+      const coordinates = (canSeeCoordinates && form.latitude.trim() && form.longitude.trim())
+        ? `${form.latitude.trim()},${form.longitude.trim()}`
+        : undefined
+
       await apiService.createAddress({
         name: form.name.trim(),
         houseNo: form.houseNo.trim(),
@@ -228,12 +269,13 @@ const AddAddress: React.FC = () => {
         city: form.city.trim(),
         state: form.state.trim(),
         zip: form.zip.trim(),
-        locality: form.locality.trim(),
+        locality: form.locality.trim() || 'Unassigned',
         masjid: form.masjid.trim(),
         lastVisit: form.lastVisit,
         comments: form.comments.trim(),
-        latitude: form.latitude.trim() ? Number(form.latitude) : undefined,
-        longitude: form.longitude.trim() ? Number(form.longitude) : undefined,
+        coordinates,
+        latitude: canSeeCoordinates && form.latitude.trim() ? Number(form.latitude) : undefined,
+        longitude: canSeeCoordinates && form.longitude.trim() ? Number(form.longitude) : undefined,
       })
       setSuccess('Address submitted successfully and is pending admin approval.')
       setForm((prev) => ({
@@ -307,6 +349,17 @@ const AddAddress: React.FC = () => {
       <Paper elevation={1} sx={{ p: 3 }}>
         <form onSubmit={handleSubmit}>
           <Grid container spacing={2}>
+            {canUseCurrentLocation && (
+              <Grid item xs={12}>
+                <Button
+                  variant="outlined"
+                  onClick={handleUseCurrentLocation}
+                  disabled={loading || locating}
+                >
+                  {locating ? 'Getting Location...' : 'Use Current Location'}
+                </Button>
+              </Grid>
+            )}
             <Grid item xs={12} md={6}>
               <TextField fullWidth label="Name" value={form.name} onChange={(e) => updateField('name', e.target.value)} />
             </Grid>
@@ -329,7 +382,7 @@ const AddAddress: React.FC = () => {
               <TextField fullWidth label="Zip" value={form.zip} onChange={(e) => updateField('zip', e.target.value)} />
             </Grid>
             <Grid item xs={12} md={6}>
-              <TextField fullWidth label="Locality" value={form.locality} onChange={(e) => updateField('locality', e.target.value)} />
+              <TextField fullWidth label="Locality (Optional)" value={form.locality} onChange={(e) => updateField('locality', e.target.value)} />
             </Grid>
             <Grid item xs={12} md={6}>
               <TextField
@@ -341,6 +394,9 @@ const AddAddress: React.FC = () => {
                 disabled={loadingMasjids || (!isSuperAdmin && ownedMasjids.length === 0)}
                 helperText={loadingMasjids ? 'Loading your approved masjids...' : 'Select one of your approved masjids'}
               >
+                <MenuItem value="" disabled>
+                  <em>Select a Masjid</em>
+                </MenuItem>
                 {ownedMasjids.map((masjid) => (
                   <MenuItem key={masjid.id} value={masjid.name}>
                     {masjid.name}
@@ -351,47 +407,53 @@ const AddAddress: React.FC = () => {
             <Grid item xs={12} md={4}>
               <TextField fullWidth label="Last Visit" type="date" value={form.lastVisit} onChange={(e) => updateField('lastVisit', e.target.value)} InputLabelProps={{ shrink: true }} />
             </Grid>
-            <Grid item xs={12} md={4}>
-              <TextField
-                fullWidth
-                label="Latitude"
-                value={form.latitude}
-                onChange={(e) => updateField('latitude', e.target.value, false)}
-                InputProps={{ endAdornment: geocoding ? <CircularProgress size={16} /> : undefined }}
-                helperText="Auto-filled from address"
-              />
-            </Grid>
-            <Grid item xs={12} md={4}>
-              <TextField
-                fullWidth
-                label="Longitude"
-                value={form.longitude}
-                onChange={(e) => updateField('longitude', e.target.value, false)}
-                helperText="Auto-filled from address"
-              />
-            </Grid>
-            <Grid item xs={12} md={4}>
-              <Button
-                fullWidth
-                variant="outlined"
-                onClick={handleUseCurrentLocation}
-                disabled={loading || locating}
-                sx={{ height: '56px' }}
-              >
-                {locating ? 'Getting Location...' : 'Use Current Location'}
-              </Button>
-            </Grid>
-            {needsRegeocode && (
+            {canSeeCoordinates && (
+              <Grid item xs={12} md={4}>
+                <TextField
+                  fullWidth
+                  label="Latitude"
+                  value={form.latitude}
+                  onChange={(e) => updateField('latitude', e.target.value, false)}
+                  InputProps={{ endAdornment: geocoding ? <CircularProgress size={16} /> : undefined }}
+                  helperText={canGeocode ? 'Auto-filled from address' : 'Optional — enter if known'}
+                />
+              </Grid>
+            )}
+            {canSeeCoordinates && (
+              <Grid item xs={12} md={4}>
+                <TextField
+                  fullWidth
+                  label="Longitude"
+                  value={form.longitude}
+                  onChange={(e) => updateField('longitude', e.target.value, false)}
+                  helperText={canGeocode ? 'Auto-filled from address' : 'Optional — enter if known'}
+                />
+              </Grid>
+            )}
+            {canGeocode && (
               <Grid item xs={12} md={4}>
                 <Button
                   fullWidth
                   variant="contained"
                   color="secondary"
                   onClick={() => geocodeAddress(form)}
+                  disabled={loading || geocoding || !form.houseNo.trim() || !form.streetName.trim() || !form.city.trim()}
+                  sx={{ height: '56px' }}
+                >
+                  {geocoding ? 'Geocoding...' : 'Geocode This Address'}
+                </Button>
+              </Grid>
+            )}
+            {canGeocode && needsRegeocode && (
+              <Grid item xs={12} md={4}>
+                <Button
+                  fullWidth
+                  variant="outlined"
+                  onClick={() => geocodeAddress(form)}
                   disabled={loading || geocoding}
                   sx={{ height: '56px' }}
                 >
-                  {geocoding ? 'Geocoding...' : 'Geocode Fixed Information'}
+                  {geocoding ? 'Geocoding...' : 'Re-geocode Updated Address'}
                 </Button>
               </Grid>
             )}

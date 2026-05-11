@@ -27,6 +27,62 @@ function permission_to_level($permissionRaw) {
         return 0;
 }
 
+function enforce_address_access($con, $permissionLevel, $orgId) {
+    if ($permissionLevel < 2) {
+        http_response_code(403);
+        echo json_encode(array('success' => false, 'message' => 'Only admins and editors can import addresses'));
+        exit;
+    }
+
+    if ($permissionLevel >= 4) {
+        return;
+    }
+
+    if ($orgId <= 0) {
+        http_response_code(403);
+        echo json_encode(array('success' => false, 'message' => 'Organization subscription is required'));
+        exit;
+    }
+
+    $safeOrgId = intval($orgId);
+    $subResult = mysqli_query($con, "SELECT plan_status, trial_ends_at FROM organizations WHERE id = $safeOrgId LIMIT 1");
+    if (!$subResult) {
+        // Cannot verify subscription — allow access
+        return;
+    }
+    $subRow = mysqli_fetch_assoc($subResult);
+    mysqli_free_result($subResult);
+
+    if (!$subRow) {
+        http_response_code(403);
+        echo json_encode(array('success' => false, 'message' => 'Organization subscription is required'));
+        exit;
+    }
+
+    $planStatus  = $subRow['plan_status'];
+    $trialEndsAt = $subRow['trial_ends_at'];
+    $normalized  = strtolower(trim((string)$planStatus));
+
+    if ($normalized === 'trial') {
+        try {
+            $now      = new DateTime('now', new DateTimeZone('UTC'));
+            $trialEnd = new DateTime((string)$trialEndsAt, new DateTimeZone('UTC'));
+            if ($now > $trialEnd) {
+                mysqli_query($con, "UPDATE organizations SET plan_status = 'expired' WHERE id = $safeOrgId");
+                $normalized = 'expired';
+            }
+        } catch (Exception $e) {
+            $normalized = 'expired';
+        }
+    }
+
+    if ($normalized !== 'active' && $normalized !== 'trial') {
+        http_response_code(403);
+        echo json_encode(array('success' => false, 'message' => 'Active subscription required to import addresses'));
+        exit;
+    }
+}
+
 function resolve_effective_owner_id($con, $userId, $orgId, $permissionLevel) {
         if ($permissionLevel >= 3 || $orgId <= 0) {
                 return intval($userId);
@@ -89,9 +145,13 @@ if (!$authUser) {
     echo json_encode(['success' => false, 'message' => 'Unauthorized']);
     exit;
 }
+$permissionLevel = permission_to_level($authUser['permissions']);
+enforce_address_access($con, $permissionLevel, intval($authUser['org_id']));
 $uploadedBy = resolve_effective_owner_id($con, intval($authUser['id']), intval($authUser['org_id']), permission_to_level($authUser['permissions']));
 $uploadedByOrgId = $authUser['org_id'];
 $selectedMasjid = isset($_POST['masjid']) ? trim($_POST['masjid']) : '';
+$validateOnly = isset($_POST['validateOnly']) && $_POST['validateOnly'] === '1';
+$ignoreErrors = isset($_POST['ignoreErrors']) && $_POST['ignoreErrors'] === '1';
 
 if ($selectedMasjid === '') {
     http_response_code(400);
@@ -162,9 +222,42 @@ if ($rawHeaders === false) {
     exit;
 }
 
-// Normalise headers: lowercase, strip BOM + whitespace
+function normalize_header_name($header) {
+    $normalized = strtolower(trim(preg_replace('/^\xEF\xBB\xBF/', '', $header)));
+    $normalized = preg_replace('/[^a-z0-9]+/', '', $normalized);
+
+    $aliases = [
+        'houseno' => 'houseno',
+        'hno' => 'houseno',
+        'house_no' => 'houseno',
+        'aptno' => 'aptno',
+        'aptnoo' => 'aptno',
+        'apt_no' => 'aptno',
+        'apartment' => 'aptno',
+        'streetname' => 'streetname',
+        'stname' => 'streetname',
+        'st_name' => 'streetname',
+        'city' => 'city',
+        'state' => 'state',
+        'zip' => 'zip',
+        'zipcode' => 'zip',
+        'locality' => 'locality',
+        'comments' => 'comments',
+        'lastvisit' => 'lastvisit',
+        'last_visit' => 'lastvisit',
+        'masjid' => 'masjid',
+        'coordinates' => 'coordinates',
+        'verified' => 'verified',
+        'name' => 'name',
+        'halaqa' => 'halaqa',
+    ];
+
+    return isset($aliases[$normalized]) ? $aliases[$normalized] : $normalized;
+}
+
+// Normalise headers: lowercase, strip BOM + whitespace, then map aliases
 $headers = array_map(function($h) {
-    return strtolower(trim(preg_replace('/^\xEF\xBB\xBF/', '', $h)));
+    return normalize_header_name($h);
 }, $rawHeaders);
 
 $colIndex = array_flip($headers);
@@ -192,23 +285,6 @@ function col($row, $colIndex, $name) {
         : '';
 }
 
-// ---------------------------------------------------------------
-// Prepare insert statement (used for every valid row)
-// ---------------------------------------------------------------
-$insertSql = 'INSERT INTO Addresses_AWS
-    (Name, Halaqa, H_No, Apt_No, St_Name, City, State, Zip,
-     Verified, Masjid, Comments, Last_Visit, Coordinates, Locality,
-     Area, Status, `Clear`, uploaded_by)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
-
-$insertStmt = mysqli_prepare($con, $insertSql);
-if (!$insertStmt) {
-    fclose($handle);
-    http_response_code(500);
-    echo json_encode(['success' => false, 'message' => 'Failed to prepare insert: ' . mysqli_error($con)]);
-    exit;
-}
-
 // Prepare duplicate-check statement
 $dupSql = 'SELECT ID FROM Addresses_AWS
            WHERE Name = ? AND H_No = ? AND St_Name = ? AND City = ? AND State = ? AND Zip = ?
@@ -227,10 +303,9 @@ if (!$dupStmt) {
 $inserted = 0;
 $skipped  = 0;
 $errors   = [];
+$validRows = [];
 $rowNum   = 1; // header was row 1; data starts at row 2
 
-$defaultArea        = 'unclassified';
-$defaultStatus      = 'Muslim';
 $defaultClear       = 0;
 $defaultVerified    = 'N';
 $defaultMasjid      = $selectedMasjid;
@@ -255,23 +330,44 @@ while (($row = fgetcsv($handle)) !== false) {
     $locality    = col($row, $colIndex, 'locality');
     $comments    = col($row, $colIndex, 'comments');
     $lastVisitRaw = col($row, $colIndex, 'lastvisit');
+    // CSV masjid is intentionally ignored; selected dropdown masjid is authoritative.
+    $rowCoordinatesRaw = col($row, $colIndex, 'coordinates');
+    $rowVerifiedRaw = col($row, $colIndex, 'verified');
     $halaqa      = col($row, $colIndex, 'halaqa');
 
     if ($halaqa === '') $halaqa = 'Atlanta East';
 
-    // Validate required fields per row
-    $rowErrors = [];
-    if ($name === '')       $rowErrors[] = 'name is empty';
-    if ($houseNo === '')    $rowErrors[] = 'houseNo is empty';
-    if ($streetName === '') $rowErrors[] = 'streetName is empty';
-    if ($city === '')       $rowErrors[] = 'city is empty';
-    if ($state === '')      $rowErrors[] = 'state is empty';
-    if ($zip === '')        $rowErrors[] = 'zip is empty';
-    if ($locality === '')   $rowErrors[] = 'locality is empty';
+    $masjidToUse = $defaultMasjid;
 
-    if ($rowErrors) {
-        $errors[] = ['row' => $rowNum, 'message' => implode('; ', $rowErrors)];
-        continue;
+    $coordinatesToUse = $defaultCoordinates;
+    $coordToken = strtoupper(trim($rowCoordinatesRaw));
+    $isMissingCoordinate = in_array($coordToken, ['', 'NA', 'N/A', 'NULL', 'NONE', '-', '--'], true)
+        || preg_match('/^\s*N\/?A\s*,\s*N\/?A\s*$/i', $rowCoordinatesRaw)
+        || preg_match('/^\s*NULL\s*,\s*NULL\s*$/i', $rowCoordinatesRaw);
+
+    if (!$isMissingCoordinate) {
+        if (preg_match('/^\s*-?\d+(?:\.\d+)?\s*,\s*-?\d+(?:\.\d+)?\s*$/', $rowCoordinatesRaw)) {
+            $parts = explode(',', $rowCoordinatesRaw, 2);
+            $lat = trim($parts[0]);
+            $lng = trim($parts[1]);
+            $coordinatesToUse = $lat . ',' . $lng;
+        } else {
+            $errors[] = ['row' => $rowNum, 'message' => 'coordinates must be in "lat,lng" format (or leave blank/NA)'];
+            continue;
+        }
+    }
+
+    $verifiedToUse = $defaultVerified;
+    if ($rowVerifiedRaw !== '') {
+        $normalized = strtoupper(trim($rowVerifiedRaw));
+        if ($normalized === 'Y' || $normalized === 'YES' || $normalized === 'TRUE' || $normalized === '1') {
+            $verifiedToUse = 'Y';
+        } elseif ($normalized === 'N' || $normalized === 'NO' || $normalized === 'FALSE' || $normalized === '0') {
+            $verifiedToUse = 'N';
+        } else {
+            $errors[] = ['row' => $rowNum, 'message' => 'verified must be Y or N'];
+            continue;
+        }
     }
 
     // Sanitise last_visit — accept YYYY-MM-DD or common US formats
@@ -298,47 +394,124 @@ while (($row = fgetcsv($handle)) !== false) {
         continue;
     }
 
-    // Insert
+    $validRows[] = [
+        'name' => $name,
+        'halaqa' => $halaqa,
+        'houseNo' => $houseNo,
+        'aptNo' => $aptNo,
+        'streetName' => $streetName,
+        'city' => $city,
+        'state' => $state,
+        'zip' => $zip,
+        'verified' => $verifiedToUse,
+        'masjid' => $masjidToUse,
+        'comments' => $comments,
+        'lastVisit' => $lastVisit,
+        'coordinates' => $coordinatesToUse,
+        'locality' => $locality,
+    ];
+}
+
+fclose($handle);
+mysqli_stmt_close($dupStmt);
+
+if ($validateOnly) {
+    http_response_code(200);
+    echo json_encode([
+        'success' => true,
+        'validationOnly' => true,
+        'canImport' => count($validRows) > 0,
+        'inserted' => count($validRows),
+        'skipped' => $skipped,
+        'errors' => $errors,
+        'message' => count($errors) === 0
+            ? 'Validation passed. Confirm to import all rows.'
+            : 'Some rows have invalid coordinates. Those rows will be skipped; all others will import.',
+    ]);
+    exit;
+}
+
+if (count($errors) > 0 && !$ignoreErrors) {
+    http_response_code(200);
+    echo json_encode([
+        'success' => false,
+        'validationOnly' => false,
+        'canImport' => false,
+        'inserted' => 0,
+        'skipped' => $skipped,
+        'errors' => $errors,
+        'message' => 'Import blocked: fix all validation errors first.',
+    ]);
+    exit;
+}
+
+$insertSql = 'INSERT INTO Addresses_AWS
+    (Name, Halaqa, H_No, Apt_No, St_Name, City, State, Zip,
+     Verified, Masjid, Comments, Last_Visit, Coordinates, Locality,
+     `Clear`, uploaded_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
+
+$insertStmt = mysqli_prepare($con, $insertSql);
+if (!$insertStmt) {
+    http_response_code(500);
+    echo json_encode(['success' => false, 'message' => 'Failed to prepare insert: ' . mysqli_error($con)]);
+    exit;
+}
+
+mysqli_begin_transaction($con);
+$insertFailed = false;
+
+foreach ($validRows as $rowData) {
     mysqli_stmt_bind_param(
         $insertStmt,
-        'ssssssssssssssssii',
-        $name,
-        $halaqa,
-        $houseNo,
-        $aptNo,
-        $streetName,
-        $city,
-        $state,
-        $zip,
-        $defaultVerified,
-        $defaultMasjid,
-        $comments,
-        $lastVisit,
-        $defaultCoordinates,
-        $locality,
-        $defaultArea,
-        $defaultStatus,
+        'ssssssssssssssii',
+        $rowData['name'],
+        $rowData['halaqa'],
+        $rowData['houseNo'],
+        $rowData['aptNo'],
+        $rowData['streetName'],
+        $rowData['city'],
+        $rowData['state'],
+        $rowData['zip'],
+        $rowData['verified'],
+        $rowData['masjid'],
+        $rowData['comments'],
+        $rowData['lastVisit'],
+        $rowData['coordinates'],
+        $rowData['locality'],
         $defaultClear,
         $uploadedBy
     );
 
     if (!mysqli_stmt_execute($insertStmt)) {
-        $errors[] = ['row' => $rowNum, 'message' => 'DB insert failed: ' . mysqli_stmt_error($insertStmt)];
-    } else {
-        $inserted++;
+        $insertFailed = true;
+        $errors[] = ['row' => -1, 'message' => 'DB insert failed: ' . mysqli_stmt_error($insertStmt)];
+        break;
     }
+    $inserted++;
 }
 
-fclose($handle);
+if ($insertFailed) {
+    mysqli_rollback($con);
+    $inserted = 0;
+} else {
+    mysqli_commit($con);
+}
+
 mysqli_stmt_close($insertStmt);
-mysqli_stmt_close($dupStmt);
 
 http_response_code(200);
 echo json_encode([
-    'success'  => true,
+    'success'  => !$insertFailed,
+    'validationOnly' => false,
+    'canImport' => !$insertFailed,
     'inserted' => $inserted,
     'skipped'  => $skipped,
     'errors'   => $errors,
-    'message'  => "Import complete: $inserted inserted, $skipped skipped, " . count($errors) . " errors",
+    'message'  => $insertFailed
+        ? 'Import failed and was rolled back. No rows were inserted.'
+        : ($ignoreErrors && count($errors) > 0
+            ? "Import complete with ignored row errors: $inserted inserted, $skipped skipped, " . count($errors) . " ignored errors"
+            : "Import complete: $inserted inserted, $skipped skipped, " . count($errors) . " errors"),
 ]);
 ?>

@@ -175,6 +175,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $input = $_POST;
     }
 
+    $action = isset($input['action']) ? trim((string)$input['action']) : 'approve';
     $id = isset($input['id']) ? intval($input['id']) : 0;
     if ($id <= 0) {
         respond(400, array('success' => false, 'message' => 'id is required'));
@@ -184,7 +185,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $effectiveOwnerId = resolve_effective_owner_id($con, $me);
 
     if (!$isSuperAdmin) {
-        // Non-super users can only approve their own pending masjids.
         $ownerStmt = mysqli_prepare($con, 'SELECT Created_by FROM Masjids_AWS WHERE ID = ? LIMIT 1');
         if (!$ownerStmt) {
             respond(500, array('success' => false, 'message' => 'Failed to verify ownership'));
@@ -197,10 +197,53 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         mysqli_stmt_close($ownerStmt);
 
         if (intval($ownerId) !== $effectiveOwnerId) {
-            respond(403, array('success' => false, 'message' => 'You can only approve submissions for your parent account'));
+            respond(403, array('success' => false, 'message' => 'You can only modify submissions for your parent account'));
         }
     }
 
+    if ($action === 'update') {
+        $name       = isset($input['name'])       ? trim((string)$input['name'])       : '';
+        $houseNo    = isset($input['houseNo'])     ? trim((string)$input['houseNo'])    : '';
+        $aptNo      = isset($input['aptNo'])       ? trim((string)$input['aptNo'])      : '';
+        $streetName = isset($input['streetName'])  ? trim((string)$input['streetName']) : '';
+        $city       = isset($input['city'])        ? trim((string)$input['city'])       : '';
+        $state      = isset($input['state'])       ? trim((string)$input['state'])      : '';
+        $zip        = isset($input['zip'])         ? trim((string)$input['zip'])        : '';
+        $coordRaw   = isset($input['coordinates']) ? trim((string)$input['coordinates']): '';
+
+        $coordinates = '';
+        if ($coordRaw !== '') {
+            if (!preg_match('/^\s*-?\d+(?:\.\d+)?\s*,\s*-?\d+(?:\.\d+)?\s*$/', $coordRaw)) {
+                respond(400, array('success' => false, 'message' => 'coordinates must be in "lat,lng" format'));
+            }
+            $parts = explode(',', $coordRaw, 2);
+            $coordinates = trim($parts[0]) . ',' . trim($parts[1]);
+        }
+
+        $stmt = mysqli_prepare($con,
+            'UPDATE Masjids_AWS SET Name = ?, H_No = ?, Apt_No = ?, St_Name = ?, City = ?, State = ?, Zip = ?, Coordinates = ? WHERE ID = ?'
+        );
+        if (!$stmt) {
+            respond(500, array('success' => false, 'message' => 'Failed to prepare update query'));
+        }
+        mysqli_stmt_bind_param($stmt, 'ssssssssi', $name, $houseNo, $aptNo, $streetName, $city, $state, $zip, $coordinates, $id);
+        mysqli_stmt_execute($stmt);
+        mysqli_stmt_close($stmt);
+        respond(200, array('success' => true, 'message' => 'Masjid updated'));
+    }
+
+    if ($action === 'delete') {
+        $stmt = mysqli_prepare($con, 'DELETE FROM Masjids_AWS WHERE ID = ?');
+        if (!$stmt) {
+            respond(500, array('success' => false, 'message' => 'Failed to prepare delete query'));
+        }
+        mysqli_stmt_bind_param($stmt, 'i', $id);
+        mysqli_stmt_execute($stmt);
+        mysqli_stmt_close($stmt);
+        respond(200, array('success' => true, 'message' => 'Masjid deleted'));
+    }
+
+    // Default: approve
     $stmt = mysqli_prepare($con, 'UPDATE Masjids_AWS SET `Clear` = 1 WHERE ID = ?');
     if (!$stmt) {
         respond(500, array('success' => false, 'message' => 'Failed to prepare approval update query'));
