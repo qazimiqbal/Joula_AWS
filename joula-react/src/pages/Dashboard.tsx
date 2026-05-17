@@ -21,6 +21,7 @@ const Dashboard: React.FC = () => {
   const canManageOwnData = permissionLevel >= 2;
   const [pendingMasjids, setPendingMasjids] = useState<PendingMasjidRecord[]>([]);
   const [pendingAddresses, setPendingAddresses] = useState<PendingGeocodeRecord[]>([]);
+  const [pendingUsersCount, setPendingUsersCount] = useState(0);
   // availableMasjids powers address access/warning checks.
   // - child editors: org-scoped (mirror parent visibility)
   // - others: own uploads (including pending)
@@ -66,6 +67,7 @@ const Dashboard: React.FC = () => {
     if (!user?.id || isViewer) {
       setPendingMasjids([]);
       setPendingAddresses([]);
+      setPendingUsersCount(0);
       setAvailableMasjids([]);
       setLoadingAvailableMasjids(false);
       return;
@@ -73,6 +75,13 @@ const Dashboard: React.FC = () => {
 
     loadPendingMasjids(isSuperAdmin, user.id).then(setPendingMasjids).catch(() => setPendingMasjids([]));
     loadPendingAddresses(isSuperAdmin, user.id).then(setPendingAddresses).catch(() => setPendingAddresses([]));
+    if (isSuperAdmin) {
+      apiService.getPendingUsers(user.id)
+        .then((rows) => setPendingUsersCount(rows.length))
+        .catch(() => setPendingUsersCount(0));
+    } else {
+      setPendingUsersCount(0);
+    }
 
     setLoadingAvailableMasjids(true);
     loadAvailableMasjids(user.id)
@@ -162,7 +171,7 @@ const Dashboard: React.FC = () => {
                         variant="outlined"
                         onClick={() => navigate('/addresses/new')}
                       >
-                        Add New Address (AWS)
+                        Add New Address
                       </Button>
                     </Grid>
                   )}
@@ -206,6 +215,18 @@ const Dashboard: React.FC = () => {
                       onClick={() => navigate('/pending-users')}
                     >
                       Approve New Users
+                      {pendingUsersCount > 0 && (
+                        <span style={{
+                          background: '#d32f2f',
+                          color: '#fff',
+                          borderRadius: '12px',
+                          padding: '2px 10px',
+                          marginLeft: 12,
+                          fontWeight: 700,
+                          fontSize: 14,
+                          display: 'inline-block',
+                        }}>{pendingUsersCount}</span>
+                      )}
                     </Button>
                   </Grid>
                   <Grid item xs={12} sm={6} md={4}>

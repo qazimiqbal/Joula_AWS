@@ -22,6 +22,25 @@ function permission_to_level($permissionRaw) {
     return 0;
 }
 
+function has_column($con, $tableName, $columnName) {
+    $safeTable = '`' . str_replace('`', '``', $tableName) . '`';
+    $safeColumn = mysqli_real_escape_string($con, $columnName);
+    $result = mysqli_query($con, "SHOW COLUMNS FROM $safeTable LIKE '$safeColumn'");
+    if (!$result) return false;
+    $exists = mysqli_fetch_row($result) ? true : false;
+    mysqli_free_result($result);
+    return $exists;
+}
+
+function has_table($con, $tableName) {
+    $safeTable = mysqli_real_escape_string($con, $tableName);
+    $result = mysqli_query($con, "SHOW TABLES LIKE '$safeTable'");
+    if (!$result) return false;
+    $exists = mysqli_fetch_row($result) ? true : false;
+    mysqli_free_result($result);
+    return $exists;
+}
+
 include('db.php');
 mysqli_select_db($con, $db);
 
@@ -108,6 +127,74 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($affectedRows <= 0) {
         respond(404, array('success' => false, 'message' => 'Pending user not found or already reviewed'));
+    }
+
+    // On approval, provision org defaults for self-signup users (e.g., Google signups)
+    // so they can use admin/team features immediately after approval.
+    if ($action === 'approve') {
+        $hasOrgId = has_column($con, 'Login_user_AWS', 'org_id');
+        $hasOrgRole = has_column($con, 'Login_user_AWS', 'org_role');
+        $hasPermissions = has_column($con, 'Login_user_AWS', 'Permissions');
+        $hasOrganizations = has_table($con, 'organizations');
+
+        $permissionsRaw = '';
+        $username = '';
+        $orgId = 0;
+        if ($hasOrgId && $hasPermissions) {
+            $stmtUser = mysqli_prepare($con, "SELECT username, Permissions, org_id FROM Login_user_AWS WHERE id = ? LIMIT 1");
+            if ($stmtUser) {
+                mysqli_stmt_bind_param($stmtUser, 'i', $userId);
+                mysqli_stmt_execute($stmtUser);
+                mysqli_stmt_bind_result($stmtUser, $username, $permissionsRaw, $orgId);
+                mysqli_stmt_fetch($stmtUser);
+                mysqli_stmt_close($stmtUser);
+            }
+        }
+
+        // Align with self-signup policy: default approved new users should be admin (3)
+        if ($hasPermissions && permission_to_level($permissionsRaw) < 3) {
+            $perm = '3';
+            $stmtPerm = mysqli_prepare($con, "UPDATE Login_user_AWS SET Permissions = ? WHERE id = ? LIMIT 1");
+            if ($stmtPerm) {
+                mysqli_stmt_bind_param($stmtPerm, 'si', $perm, $userId);
+                mysqli_stmt_execute($stmtPerm);
+                mysqli_stmt_close($stmtPerm);
+            }
+        }
+
+        // Ensure org_role is admin for these newly approved self-signup users.
+        if ($hasOrgRole) {
+            $role = 'admin';
+            $stmtRole = mysqli_prepare($con, "UPDATE Login_user_AWS SET org_role = ? WHERE id = ? AND (org_role IS NULL OR org_role = '' OR org_role = 'viewer') LIMIT 1");
+            if ($stmtRole) {
+                mysqli_stmt_bind_param($stmtRole, 'si', $role, $userId);
+                mysqli_stmt_execute($stmtRole);
+                mysqli_stmt_close($stmtRole);
+            }
+        }
+
+        // If user has no org yet, create one with 30-day trial and link them.
+        if ($hasOrganizations && $hasOrgId && intval($orgId) <= 0) {
+            $orgName = ($username !== '' ? $username : 'User') . "'s Organization";
+            $trialEndsAt = date('Y-m-d H:i:s', strtotime('+30 days'));
+            $stmtOrg = mysqli_prepare($con,
+                "INSERT INTO organizations (name, owner_user_id, plan_status, trial_ends_at, max_editors, max_viewers) VALUES (?, ?, 'trial', ?, 1, 3)");
+            if ($stmtOrg) {
+                mysqli_stmt_bind_param($stmtOrg, 'sis', $orgName, $userId, $trialEndsAt);
+                mysqli_stmt_execute($stmtOrg);
+                $newOrgId = mysqli_insert_id($con);
+                mysqli_stmt_close($stmtOrg);
+
+                if ($newOrgId > 0) {
+                    $stmtLink = mysqli_prepare($con, "UPDATE Login_user_AWS SET org_id = ? WHERE id = ? LIMIT 1");
+                    if ($stmtLink) {
+                        mysqli_stmt_bind_param($stmtLink, 'ii', $newOrgId, $userId);
+                        mysqli_stmt_execute($stmtLink);
+                        mysqli_stmt_close($stmtLink);
+                    }
+                }
+            }
+        }
     }
 
     respond(200, array('success' => true, 'message' => 'User review completed successfully'));

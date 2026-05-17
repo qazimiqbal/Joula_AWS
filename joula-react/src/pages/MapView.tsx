@@ -62,7 +62,7 @@ function getMarkerColor(lastVisit?: string): string {
   const daysSince = (Date.now() - visited.getTime()) / (1000 * 60 * 60 * 24)
   if (daysSince < 90) return '#42DB35'
   if (daysSince < 180) return '#FAED0A'
-  return '#29b6f6'
+  return '#64b5f6'
 }
 
 const MapView: React.FC = () => {

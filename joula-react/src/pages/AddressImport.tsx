@@ -16,7 +16,9 @@ import {
   Divider,
   Chip,
   MenuItem,
-  TextField,
+  FormControl,
+  InputLabel,
+  Select,
 } from '@mui/material'
 import UploadFileIcon from '@mui/icons-material/UploadFile'
 import DownloadIcon from '@mui/icons-material/Download'
@@ -25,19 +27,18 @@ import { ImportAddressesResponse, Masjid } from '@/types'
 import { useAuth } from '@/context/AuthContext'
 
 const CSV_TEMPLATE_HEADERS = [
-  'name',
-  'houseNo',
-  'aptNo',
-  'streetName',
-  'city',
-  'state',
-  'zip',
+  'Name',
+  'H_No',
+  'Apt_No',
+  'St_Name',
+  'City',
+  'State',
+  'Zip',
+  'Comments',
   'locality',
-  'comments',
-  'lastVisit',
-  'masjid',
-  'coordinates',
-  'verified',
+  'Last_Visit',
+  'Coordinates',
+  'Verified',
 ]
 
 const CSV_EXAMPLE_ROW = [
@@ -48,10 +49,9 @@ const CSV_EXAMPLE_ROW = [
   'Atlanta',
   'GA',
   '30301',
+  '',
   'Eastside',
   '',
-  '',
-  'Omar',
   '33.7490,-84.3880',
   'N',
 ]
@@ -111,6 +111,26 @@ interface PreviewRow {
   [key: string]: string
 }
 
+const PREVIEW_HEADER_LABELS: Record<string, string> = {
+  name: 'Name',
+  houseno: 'H_No',
+  aptno: 'Apt_No',
+  streetname: 'St_Name',
+  city: 'City',
+  state: 'State',
+  zip: 'Zip',
+  comments: 'Comments',
+  locality: 'locality',
+  lastvisit: 'Last_Visit',
+  coordinates: 'Coordinates',
+  verified: 'Verified',
+}
+
+function formatPreviewHeader(header: string) {
+  const normalized = header.trim().toLowerCase().replace(/[^a-z0-9]+/g, '')
+  return PREVIEW_HEADER_LABELS[normalized] || header
+}
+
 function parseCsvPreview(file: File): Promise<{ headers: string[]; rows: PreviewRow[] }> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
@@ -159,7 +179,7 @@ const AddressImport: React.FC = () => {
 
     setLoadingMasjids(true)
     apiService
-      .getMasjids({ orgScoped: true })
+      .getMasjids({ mine: true })
       .then((masjids) => {
         setOwnedMasjids(masjids)
         setSelectedMasjid('')
@@ -273,7 +293,8 @@ const AddressImport: React.FC = () => {
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
         Upload a CSV file to bulk-add addresses. Rows with missing coordinates will appear on the{' '}
         <strong>Fix Missing Coordinates</strong> page for geocoding. You will only see addresses
-        you have uploaded.
+        you have uploaded. The selected masjid from the dropdown will be attached automatically,
+        so the CSV template does not need a masjid column.
       </Typography>
 
       {!loadingMasjids && ownedMasjids.length === 0 && (
@@ -283,24 +304,24 @@ const AddressImport: React.FC = () => {
       )}
 
       <Box sx={{ mb: 2 }}>
-        <TextField
-          fullWidth
-          select
-          label="Masjid"
-          value={selectedMasjid}
-          onChange={(e) => setSelectedMasjid(e.target.value)}
-          disabled={loadingMasjids || ownedMasjids.length === 0 || loading}
-          helperText={loadingMasjids ? 'Loading your approved masjids...' : 'Imported addresses will be attached to this masjid'}
-        >
-          <MenuItem value="" disabled>
-            <em>Select a Masjid</em>
-          </MenuItem>
-          {ownedMasjids.map((masjid) => (
-            <MenuItem key={masjid.id} value={masjid.name}>
-              {masjid.name}
+        <FormControl fullWidth disabled={loadingMasjids || ownedMasjids.length === 0 || loading}>
+          <InputLabel>Masjid *</InputLabel>
+          <Select
+            value={selectedMasjid}
+            label="Masjid *"
+            onChange={(e) => setSelectedMasjid(e.target.value)}
+            displayEmpty
+          >
+            <MenuItem value="">
+              <em>Select a Masjid</em>
             </MenuItem>
-          ))}
-        </TextField>
+            {ownedMasjids.map((masjid) => (
+              <MenuItem key={masjid.id} value={masjid.name}>
+                {masjid.name}
+              </MenuItem>
+            ))}
+          </Select>
+        </FormControl>
       </Box>
 
       {/* Actions bar */}
@@ -396,12 +417,14 @@ const AddressImport: React.FC = () => {
           </Box>
 
           {validationResult.canImport ? (
-            <Alert severity="success" sx={{ mb: 1 }}>
-              No validation errors found. Click "Confirm Import All" to insert all rows together.
+            <Alert severity="success" sx={{ mb: 2, fontWeight: 'bold' }}>
+              ✓ Validation passed! {validationResult.inserted} addresses are ready to import.
+              <br />
+              <strong>Next step: Click the "Confirm Import All" button below to save these addresses to your account.</strong>
             </Alert>
           ) : (
-            <Alert severity="warning" sx={{ mb: 1 }}>
-              Fix the errors below and validate again, or choose "Ignore Errors &amp; Import Valid Rows" to continue with only valid rows.
+            <Alert severity="warning" sx={{ mb: 2, fontWeight: 'bold' }}>
+              ⚠ Some rows have validation errors. You can either fix them and validate again, or skip the bad rows and import the valid ones.
             </Alert>
           )}
 
@@ -520,7 +543,7 @@ const AddressImport: React.FC = () => {
                 <TableRow>
                   {preview.headers.map((h) => (
                     <TableCell key={h} sx={{ whiteSpace: 'nowrap', fontWeight: 'bold' }}>
-                      {h}
+                      {formatPreviewHeader(h)}
                     </TableCell>
                   ))}
                 </TableRow>
@@ -540,7 +563,7 @@ const AddressImport: React.FC = () => {
           </TableContainer>
 
           <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
-            Required columns: name, houseNo, streetName, city, state, zip, locality
+            Required columns: Name, H_No, St_Name, City, State, Zip, locality
           </Typography>
         </Paper>
       )}

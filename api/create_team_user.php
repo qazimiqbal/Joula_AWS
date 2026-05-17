@@ -84,13 +84,12 @@ if (!is_array($input)) {
 }
 
 $username = isset($input['username']) ? trim($input['username']) : '';
-$password = isset($input['password']) ? trim($input['password']) : '';
 $email = isset($input['email']) ? trim($input['email']) : '';
 $phone = isset($input['phone']) ? trim($input['phone']) : '';
 $orgRole = isset($input['orgRole']) ? trim($input['orgRole']) : '';
 
-if ($username === '' || $password === '' || $email === '' || $phone === '') {
-    respond(400, array('success' => false, 'message' => 'Username, password, email, and phone are required'));
+if ($username === '' || $email === '' || $phone === '') {
+    respond(400, array('success' => false, 'message' => 'Username, email, and phone are required'));
 }
 
 if ($orgRole !== 'editor' && $orgRole !== 'viewer') {
@@ -127,8 +126,8 @@ mysqli_stmt_close($countStmt);
 
 $maxEditors = intval($maxEditors);
 $maxViewers = intval($maxViewers);
-if ($maxEditors <= 0) $maxEditors = 5;
-if ($maxViewers <= 0) $maxViewers = 10;
+if ($maxEditors <= 0) $maxEditors = 1;
+if ($maxViewers <= 0) $maxViewers = 3;
 
 $roleLimit = ($orgRole === 'editor') ? $maxEditors : $maxViewers;
 if ($roleLimit > 0 && intval($currentCount) >= $roleLimit) {
@@ -138,23 +137,21 @@ if ($roleLimit > 0 && intval($currentCount) >= $roleLimit) {
 $dupStmt = mysqli_prepare($con,
     "SELECT
         MAX(CASE WHEN username = ? THEN 1 ELSE 0 END) AS username_exists,
-        MAX(CASE WHEN password = MD5(?) THEN 1 ELSE 0 END) AS password_exists,
         MAX(CASE WHEN email = ? THEN 1 ELSE 0 END) AS email_exists
      FROM Login_user_AWS");
 if (!$dupStmt) {
     respond(500, array('success' => false, 'message' => 'Failed to check duplicates'));
 }
-mysqli_stmt_bind_param($dupStmt, 'sss', $username, $password, $email);
+mysqli_stmt_bind_param($dupStmt, 'ss', $username, $email);
 mysqli_stmt_execute($dupStmt);
-$usernameExists = $passwordExists = $emailExists = 0;
-mysqli_stmt_bind_result($dupStmt, $usernameExists, $passwordExists, $emailExists);
+$usernameExists = $emailExists = 0;
+mysqli_stmt_bind_result($dupStmt, $usernameExists, $emailExists);
 mysqli_stmt_fetch($dupStmt);
 mysqli_stmt_close($dupStmt);
 
-if (intval($usernameExists) === 1 || intval($passwordExists) === 1 || intval($emailExists) === 1) {
+if (intval($usernameExists) === 1 || intval($emailExists) === 1) {
     $parts = array();
     if (intval($usernameExists) === 1) $parts[] = 'username already exists';
-    if (intval($passwordExists) === 1) $parts[] = 'password already exists';
     if (intval($emailExists) === 1) $parts[] = 'email already exists';
     respond(409, array('success' => false, 'message' => 'This ' . implode(' and ', $parts) . '. Please change and try again.'));
 }
@@ -182,10 +179,29 @@ $hasPhone = (function() use ($con) {
     return false;
 })();
 
+$hasGoogleOnly = (function() use ($con) {
+    $result = mysqli_query($con, "SHOW COLUMNS FROM Login_user_AWS LIKE 'google_only'");
+    if ($result) {
+        $row = mysqli_fetch_row($result);
+        mysqli_free_result($result);
+        if ($row) return true;
+    }
+    mysqli_query($con, "ALTER TABLE Login_user_AWS ADD COLUMN google_only TINYINT(1) NOT NULL DEFAULT 0");
+    $result2 = mysqli_query($con, "SHOW COLUMNS FROM Login_user_AWS LIKE 'google_only'");
+    if ($result2) {
+        $row2 = mysqli_fetch_row($result2);
+        mysqli_free_result($result2);
+        return (bool)$row2;
+    }
+    return false;
+})();
+
+$generatedPassword = bin2hex(random_bytes(24));
+
 $insertColumns = array('username', 'password', 'email');
 $insertValues  = array('?', 'MD5(?)', '?');
 $bindTypes     = 'sss';
-$bindValues    = array($username, $password, $email);
+$bindValues    = array($username, $generatedPassword, $email);
 
 if ($hasPhone) {
     $insertColumns[] = 'phone';
@@ -217,6 +233,11 @@ $insertValues[]  = '?';
 $bindTypes       .= 'i';
 $bindValues[]    = $me['orgId'];
 
+if ($hasGoogleOnly) {
+    $insertColumns[] = 'google_only';
+    $insertValues[]  = '1';
+}
+
 $sqlInsert = "INSERT INTO Login_user_AWS (" . implode(', ', $insertColumns) . ") VALUES (" . implode(', ', $insertValues) . ")";
 $stmtInsert = mysqli_prepare($con, $sqlInsert);
 
@@ -241,7 +262,7 @@ mysqli_stmt_close($stmtInsert);
 
 respond(200, array(
     'success' => true,
-    'message' => 'Team member created successfully',
+    'message' => 'Team member created successfully. They must sign in with Google using this email.',
     'userId' => intval($newUserId),
     'role' => $orgRole,
     'permission' => intval($permission),

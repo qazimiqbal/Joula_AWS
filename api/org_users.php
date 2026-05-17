@@ -111,8 +111,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
 
     $maxEditors = intval($maxEditors);
     $maxViewers = intval($maxViewers);
-    if ($maxEditors <= 0) $maxEditors = 5;
-    if ($maxViewers <= 0) $maxViewers = 10;
+    if ($maxEditors <= 0) $maxEditors = 1;
+    if ($maxViewers <= 0) $maxViewers = 3;
 
     respond(200, [
         'success' => true,
@@ -150,6 +150,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             respond(400, ['success' => false, 'message' => 'user_id and org_role (editor|viewer) are required']);
         }
 
+        if ($action === 'set_role') {
+            $targetStmt = mysqli_prepare($con,
+                "SELECT org_id, org_role FROM Login_user_AWS WHERE id = ? LIMIT 1");
+            if (!$targetStmt) {
+                respond(500, ['success' => false, 'message' => 'Failed to load target user', 'error' => mysqli_error($con)]);
+            }
+            mysqli_stmt_bind_param($targetStmt, 'i', $targetId);
+            mysqli_stmt_execute($targetStmt);
+            $targetOrgId = 0;
+            $targetRole = null;
+            mysqli_stmt_bind_result($targetStmt, $targetOrgId, $targetRole);
+            $targetFound = mysqli_stmt_fetch($targetStmt);
+            mysqli_stmt_close($targetStmt);
+
+            if (!$targetFound || intval($targetOrgId) !== intval($me['org_id'])) {
+                respond(404, ['success' => false, 'message' => 'User not found in your organization']);
+            }
+            if ($targetRole === 'org_admin' || $targetRole === 'admin') {
+                respond(403, ['success' => false, 'message' => 'Cannot change role for organization admins']);
+            }
+            if ($targetRole === $newRole) {
+                respond(200, ['success' => true, 'message' => 'Role is already up to date']);
+            }
+        }
+
         // Check seat availability
         $countStmt = mysqli_prepare($con,
             "SELECT org_role, COUNT(*) as cnt
@@ -179,10 +204,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         $maxE = intval($maxE);
         $maxV = intval($maxV);
-        if ($maxE <= 0) $maxE = 5;
-        if ($maxV <= 0) $maxV = 10;
+        if ($maxE <= 0) $maxE = 1;
+        if ($maxV <= 0) $maxV = 3;
         $limit = ($newRole === 'editor') ? $maxE : $maxV;
-        if ($action === 'add_user' && $limit > 0 && $currentCount >= $limit) {
+        if ($limit > 0 && $currentCount >= $limit) {
             respond(422, ['success' => false,
                 'message' => "Seat limit reached: your plan allows $limit {$newRole}s"]);
         }

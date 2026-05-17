@@ -7,9 +7,10 @@ import { useState } from 'react'
 import type { MouseEvent } from 'react'
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown'
+import HomeIcon from '@mui/icons-material/Home'
 import RefreshIcon from '@mui/icons-material/Refresh'
-import LogoutIcon from '@mui/icons-material/Logout'
 import { AuthProvider, useAuth } from './context/AuthContext'
+import { GoogleOAuthProvider } from '@react-oauth/google'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import MapView from './pages/MapView'
@@ -42,7 +43,7 @@ import './App.css'
 function AppHeader() {
   const navigate = useNavigate()
   const location = useLocation()
-  const { isAuthenticated, user } = useAuth()
+  const { isAuthenticated, user, logout } = useAuth()
   const [userMenuAnchor, setUserMenuAnchor] = useState<null | HTMLElement>(null)
   const showBack = isAuthenticated && location.pathname !== '/dashboard' && location.pathname !== '/login'
   const userMenuOpen = Boolean(userMenuAnchor)
@@ -58,6 +59,12 @@ function AppHeader() {
   const handleGoToAccount = () => {
     handleCloseUserMenu()
     navigate('/account')
+  }
+
+  const handleLogout = () => {
+    handleCloseUserMenu()
+    logout()
+    navigate('/login')
   }
 
   return (
@@ -82,20 +89,8 @@ function AppHeader() {
           )}
         </Box>
 
-        {/* Center: Title */}
-        <Typography
-          variant="h6"
-          component="div"
-          sx={{
-            flexGrow: 1,
-            textAlign: 'center',
-            cursor: isAuthenticated ? 'pointer' : 'default',
-            '&:hover': isAuthenticated ? { opacity: 0.8 } : {},
-          }}
-          onClick={() => isAuthenticated && navigate('/dashboard')}
-        >
-          Joula Dashboard
-        </Typography>
+        {/* Center: Spacer */}
+        <Box sx={{ flexGrow: 1 }} />
 
         {/* Right: Welcome dropdown */}
         <Box sx={{ width: 180, display: 'flex', justifyContent: 'flex-end' }}>
@@ -123,6 +118,7 @@ function AppHeader() {
                 transformOrigin={{ vertical: 'top', horizontal: 'right' }}
               >
                 <MenuItem onClick={handleGoToAccount}>Account Settings</MenuItem>
+                <MenuItem onClick={handleLogout}>Logout</MenuItem>
               </Menu>
             </>
           )}
@@ -134,7 +130,7 @@ function AppHeader() {
 
 function AppFooter() {
   const navigate = useNavigate()
-  const { isAuthenticated, logout } = useAuth()
+  const { isAuthenticated } = useAuth()
 
   if (!isAuthenticated) return null
 
@@ -149,21 +145,22 @@ function AppFooter() {
       }}
     >
       <Button
+        startIcon={<HomeIcon />}
+        onClick={() => navigate('/dashboard')}
+        sx={{ color: 'white', textTransform: 'none' }}
+      >Home</Button>
+      <Button
         startIcon={<RefreshIcon />}
         onClick={() => window.location.reload()}
         sx={{ color: 'white', textTransform: 'none' }}
       >Refresh</Button>
-      <Button
-        startIcon={<LogoutIcon />}
-        onClick={() => { logout(); navigate('/login') }}
-        sx={{ color: 'white', textTransform: 'none' }}
-      >Logout</Button>
     </Paper>
   )
 }
 
 function App() {
-  return (
+  const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined
+  const inner = (
     <AuthProvider>
       <Router basename={import.meta.env.BASE_URL}>
         <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100dvh' }}>
@@ -390,6 +387,9 @@ function App() {
       </Router>
     </AuthProvider>
   )
+  return googleClientId ? (
+    <GoogleOAuthProvider clientId={googleClientId}>{inner}</GoogleOAuthProvider>
+  ) : inner
 }
 
 export default App

@@ -99,6 +99,7 @@ export interface SubscriptionInfo {
   trialEndsAt: string
   trialDaysLeft: number
   hasPaymentMethod?: boolean
+  freeAccount?: boolean
   maxEditors: number
   maxViewers: number
   monthlyPriceCents?: number
@@ -131,7 +132,6 @@ export interface RegisterRequest {
 
 export interface CreateTeamUserRequest {
   username: string
-  password: string
   email: string
   phone: string
   role: 'editor' | 'viewer'

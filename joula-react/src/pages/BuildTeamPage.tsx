@@ -37,16 +37,14 @@ const roleColor: Record<string, 'primary' | 'secondary' | 'default'> = {
   viewer: 'default',
 }
 
-const DEFAULT_MAX_EDITORS = 5
-const DEFAULT_MAX_VIEWERS = 10
+const DEFAULT_MAX_EDITORS = 1
+const DEFAULT_MAX_VIEWERS = 3
 
 const BuildTeamPage: React.FC = () => {
   const { user } = useAuth()
   const [username, setUsername] = useState('')
   const [email, setEmail] = useState('')
   const [phone, setPhone] = useState('')
-  const [password, setPassword] = useState('')
-  const [confirmPassword, setConfirmPassword] = useState('')
   const [role, setRole] = useState<'editor' | 'viewer'>('editor')
   const [loading, setLoading] = useState(false)
   const [successMessage, setSuccessMessage] = useState('')
@@ -56,6 +54,16 @@ const BuildTeamPage: React.FC = () => {
   const [teamLoading, setTeamLoading] = useState(true)
   const [teamError, setTeamError] = useState('')
   const [busyKey, setBusyKey] = useState<string | null>(null)
+
+  const editorCount = teamData?.editorCount ?? 0
+  const viewerCount = teamData?.viewerCount ?? 0
+  const maxEditors = (teamData?.maxEditors ?? 0) > 0 ? (teamData?.maxEditors ?? 0) : DEFAULT_MAX_EDITORS
+  const maxViewers = (teamData?.maxViewers ?? 0) > 0 ? (teamData?.maxViewers ?? 0) : DEFAULT_MAX_VIEWERS
+  const editorsLeft = Math.max(maxEditors - editorCount, 0)
+  const viewersLeft = Math.max(maxViewers - viewerCount, 0)
+  const canCreateEditor = editorsLeft > 0
+  const canCreateViewer = viewersLeft > 0
+  const selectedRoleSeatsLeft = role === 'editor' ? editorsLeft : viewersLeft
 
   const loadTeam = async () => {
     setTeamLoading(true)
@@ -78,18 +86,22 @@ const BuildTeamPage: React.FC = () => {
     loadTeam()
   }, [])
 
+  useEffect(() => {
+    if (role === 'editor' && editorsLeft <= 0 && viewersLeft > 0) {
+      setRole('viewer')
+    }
+    if (role === 'viewer' && viewersLeft <= 0 && editorsLeft > 0) {
+      setRole('editor')
+    }
+  }, [role, editorsLeft, viewersLeft])
+
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault()
     setSuccessMessage('')
     setErrorMessage('')
 
-    if (!username.trim() || !email.trim() || !phone.trim() || !password.trim()) {
-      setErrorMessage('Username, email, phone, and password are required.')
-      return
-    }
-
-    if (password !== confirmPassword) {
-      setErrorMessage('Password and Re-enter password must match.')
+    if (!username.trim() || !email.trim() || !phone.trim()) {
+      setErrorMessage('Username, email, and phone are required.')
       return
     }
 
@@ -99,15 +111,12 @@ const BuildTeamPage: React.FC = () => {
         username: username.trim(),
         email: email.trim(),
         phone: phone.trim(),
-        password,
         role,
       })
       setSuccessMessage(`Team member created as ${role}.`)
       setUsername('')
       setEmail('')
       setPhone('')
-      setPassword('')
-      setConfirmPassword('')
       setRole('editor')
       setShowCreateForm(false)
       await loadTeam()
@@ -154,13 +163,15 @@ const BuildTeamPage: React.FC = () => {
     return <Navigate to="/dashboard" replace />
   }
 
-  const editorCount = teamData?.editorCount ?? 0
-  const viewerCount = teamData?.viewerCount ?? 0
-  const maxEditors = (teamData?.maxEditors ?? 0) > 0 ? (teamData?.maxEditors ?? 0) : DEFAULT_MAX_EDITORS
-  const maxViewers = (teamData?.maxViewers ?? 0) > 0 ? (teamData?.maxViewers ?? 0) : DEFAULT_MAX_VIEWERS
-  const editorsLeft = Math.max(maxEditors - editorCount, 0)
-  const viewersLeft = Math.max(maxViewers - viewerCount, 0)
-  const selectedRoleSeatsLeft = role === 'editor' ? editorsLeft : viewersLeft
+  const canPromoteMemberToEditor = (member: OrgUser) => {
+    if (member.orgRole === 'editor') return true
+    return editorsLeft > 0
+  }
+
+  const canChangeMemberToViewer = (member: OrgUser) => {
+    if (member.orgRole === 'viewer') return true
+    return viewersLeft > 0
+  }
 
   return (
     <Box
@@ -223,12 +234,20 @@ const BuildTeamPage: React.FC = () => {
                         {member.orgRole !== 'org_admin' && member.orgRole !== 'admin' && (
                           <Stack direction="row" spacing={1}>
                             {member.orgRole !== 'editor' && (
-                              <Button size="small" disabled={busyKey !== null} onClick={() => handleRoleChange(member, 'editor')}>
+                              <Button
+                                size="small"
+                                disabled={busyKey !== null || !canPromoteMemberToEditor(member)}
+                                onClick={() => handleRoleChange(member, 'editor')}
+                              >
                                 Make Editor
                               </Button>
                             )}
                             {member.orgRole !== 'viewer' && (
-                              <Button size="small" disabled={busyKey !== null} onClick={() => handleRoleChange(member, 'viewer')}>
+                              <Button
+                                size="small"
+                                disabled={busyKey !== null || !canChangeMemberToViewer(member)}
+                                onClick={() => handleRoleChange(member, 'viewer')}
+                              >
                                 Make Viewer
                               </Button>
                             )}
@@ -270,9 +289,12 @@ const BuildTeamPage: React.FC = () => {
 
           <Collapse in={showCreateForm}>
             <Stack spacing={2} component="form" onSubmit={handleSubmit}>
-              <Typography variant="body2" color="text.secondary">
-                Create editor and viewer new accounts for your organization.
-              </Typography>
+              <Alert severity="info" icon={null}>
+                <Typography variant="body2" sx={{ fontWeight: 600, mb: 0.5 }}>Google Sign-In Only</Typography>
+                <Typography variant="body2">
+                  New team members will receive an email invite and can sign in using their Google account only. No password required.
+                </Typography>
+              </Alert>
 
               <TextField
                 label="Username"
@@ -299,24 +321,6 @@ const BuildTeamPage: React.FC = () => {
                 fullWidth
               />
 
-              <TextField
-                label="Password"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                fullWidth
-              />
-
-              <TextField
-                label="Re-enter password"
-                type="password"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                required
-                fullWidth
-              />
-
               <FormControl fullWidth>
                 <InputLabel id="team-role-label">Role</InputLabel>
                 <Select
@@ -325,8 +329,8 @@ const BuildTeamPage: React.FC = () => {
                   value={role}
                   onChange={(e) => setRole(e.target.value as 'editor' | 'viewer')}
                 >
-                  <MenuItem value="editor">Editor (Permission 2)</MenuItem>
-                  <MenuItem value="viewer">Viewer (Permission 1)</MenuItem>
+                  <MenuItem value="editor" disabled={!canCreateEditor}>Editor{!canCreateEditor ? ' - Full' : ''}</MenuItem>
+                  <MenuItem value="viewer" disabled={!canCreateViewer}>Viewer{!canCreateViewer ? ' - Full' : ''}</MenuItem>
                 </Select>
               </FormControl>
 

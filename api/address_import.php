@@ -34,8 +34,8 @@ function enforce_address_access($con, $permissionLevel, $orgId) {
         exit;
     }
 
-    if ($permissionLevel >= 4) {
-        return;
+    if ($permissionLevel >= 3) {
+        return;  // Admins and super admins can import
     }
 
     if ($orgId <= 0) {
@@ -255,6 +255,27 @@ function normalize_header_name($header) {
     return isset($aliases[$normalized]) ? $aliases[$normalized] : $normalized;
 }
 
+function friendly_header_label($header) {
+    $labels = array(
+        'name' => 'Name',
+        'houseno' => 'H_No',
+        'aptno' => 'Apt_No',
+        'streetname' => 'St_Name',
+        'city' => 'City',
+        'state' => 'State',
+        'zip' => 'Zip',
+        'comments' => 'Comments',
+        'locality' => 'locality',
+        'lastvisit' => 'Last_Visit',
+        'coordinates' => 'Coordinates',
+        'verified' => 'Verified',
+        'masjid' => 'Masjid',
+    );
+
+    $key = strtolower(trim((string)$header));
+    return isset($labels[$key]) ? $labels[$key] : $header;
+}
+
 // Normalise headers: lowercase, strip BOM + whitespace, then map aliases
 $headers = array_map(function($h) {
     return normalize_header_name($h);
@@ -269,10 +290,11 @@ foreach ($required as $req) {
 }
 if ($missing) {
     fclose($handle);
+    $missingLabels = array_map('friendly_header_label', $missing);
     http_response_code(400);
     echo json_encode([
         'success' => false,
-        'message' => 'CSV is missing required columns: ' . implode(', ', $missing),
+        'message' => 'CSV is missing required columns: ' . implode(', ', $missingLabels),
         'found_columns' => $headers,
     ]);
     exit;
@@ -352,7 +374,7 @@ while (($row = fgetcsv($handle)) !== false) {
             $lng = trim($parts[1]);
             $coordinatesToUse = $lat . ',' . $lng;
         } else {
-            $errors[] = ['row' => $rowNum, 'message' => 'coordinates must be in "lat,lng" format (or leave blank/NA)'];
+            $errors[] = ['row' => $rowNum, 'message' => 'Coordinates must be in "lat,lng" format (or leave blank/NA)'];
             continue;
         }
     }
@@ -365,7 +387,7 @@ while (($row = fgetcsv($handle)) !== false) {
         } elseif ($normalized === 'N' || $normalized === 'NO' || $normalized === 'FALSE' || $normalized === '0') {
             $verifiedToUse = 'N';
         } else {
-            $errors[] = ['row' => $rowNum, 'message' => 'verified must be Y or N'];
+            $errors[] = ['row' => $rowNum, 'message' => 'Verified must be Y or N'];
             continue;
         }
     }

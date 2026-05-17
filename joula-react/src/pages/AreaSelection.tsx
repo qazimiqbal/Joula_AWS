@@ -15,15 +15,18 @@ import {
   Collapse,
   TextField,
   Divider,
-  List,
-  ListItem,
-  ListItemText,
   Dialog,
   DialogTitle,
   DialogContent,
   DialogActions,
   IconButton,
   Tooltip,
+  Table,
+  TableHead,
+  TableBody,
+  TableRow,
+  TableCell,
+  TableContainer,
 } from '@mui/material'
 import MapIcon from '@mui/icons-material/Map'
 import LocationOnIcon from '@mui/icons-material/LocationOn'
@@ -133,10 +136,10 @@ const AreaSelection: React.FC = () => {
 
   const handleShowAddressesOnMap = () => {
     if (selectedAddressMasjidId === 'all') {
-      navigate(`/map?${buildScopedParams({ allAddresses: '1' }).toString()}`)
+      navigate(`/map?${buildScopedParams({ allAddresses: '1', showMasjids: '1' }).toString()}`)
       return
     }
-    navigate(`/map?${buildScopedParams({ masjidId: selectedAddressMasjidId }).toString()}`)
+    navigate(`/map?${buildScopedParams({ masjidId: selectedAddressMasjidId, showMasjids: '1' }).toString()}`)
   }
 
   const handleRadiusSearch = () => {
@@ -366,28 +369,34 @@ const AreaSelection: React.FC = () => {
             ) : filteredMasjids.length === 0 ? (
               <Typography variant="body2" color="text.secondary">No masjids found.</Typography>
             ) : (
-              <List dense disablePadding>
-                {pagedMasjids.map(m => (
-                  <ListItem
-                    key={m.id}
-                    disableGutters
-                    divider
-                    secondaryAction={canEdit ? (
-                      <Tooltip title="Edit">
-                        <IconButton size="small" onClick={() => openEdit('masjid', m)}>
-                          <EditIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
-                    ) : undefined}
-                    sx={{ pr: canEdit ? 5 : 0 }}
-                  >
-                    <ListItemText
-                      primary={<Typography variant="body2" fontWeight={500}>{m.name}</Typography>}
-                      secondary={m.address || [m.houseNo, m.streetName, m.city, m.state].filter(Boolean).join(', ') || '—'}
-                    />
-                  </ListItem>
-                ))}
-              </List>
+              <TableContainer>
+                <Table size="small">
+                  <TableHead>
+                    <TableRow sx={{ backgroundColor: 'grey.100' }}>
+                      <TableCell sx={{ fontWeight: 600 }}>Name</TableCell>
+                      <TableCell sx={{ fontWeight: 600 }}>Address</TableCell>
+                      <TableCell sx={{ fontWeight: 600, textAlign: 'center', width: 80 }}>Edit</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {pagedMasjids.map(m => (
+                      <TableRow key={m.id} hover>
+                        <TableCell>{m.name}</TableCell>
+                        <TableCell>{m.address || [m.houseNo, m.streetName, m.city, m.state].filter(Boolean).join(', ') || '—'}</TableCell>
+                        <TableCell sx={{ textAlign: 'center' }}>
+                          {canEdit && (
+                            <Tooltip title="Edit">
+                              <IconButton size="small" onClick={() => openEdit('masjid', m)}>
+                                <EditIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
             )}
           </Paper>
         </Collapse>
@@ -471,28 +480,34 @@ const AreaSelection: React.FC = () => {
             ) : filteredAddresses.length === 0 ? (
               <Typography variant="body2" color="text.secondary">No addresses found.</Typography>
             ) : (
-              <List dense disablePadding>
-                {pagedAddresses.map(a => (
-                  <ListItem
-                    key={a.id}
-                    disableGutters
-                    divider
-                    secondaryAction={canEdit ? (
-                      <Tooltip title="Edit">
-                        <IconButton size="small" onClick={() => openEdit('address', a)}>
-                          <EditIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
-                    ) : undefined}
-                    sx={{ pr: canEdit ? 5 : 0 }}
-                  >
-                    <ListItemText
-                      primary={<Typography variant="body2" fontWeight={500}>{a.name}</Typography>}
-                      secondary={a.address || [a.houseNo, a.streetName, a.city, a.state].filter(Boolean).join(', ') || '—'}
-                    />
-                  </ListItem>
-                ))}
-              </List>
+              <TableContainer>
+                <Table size="small">
+                  <TableHead>
+                    <TableRow sx={{ backgroundColor: 'grey.100' }}>
+                      <TableCell sx={{ fontWeight: 600 }}>Name</TableCell>
+                      <TableCell sx={{ fontWeight: 600 }}>Address</TableCell>
+                      <TableCell sx={{ fontWeight: 600, textAlign: 'center', width: 80 }}>Edit</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {pagedAddresses.map(a => (
+                      <TableRow key={a.id} hover>
+                        <TableCell>{a.name}</TableCell>
+                        <TableCell>{a.address || [a.houseNo, a.streetName, a.city, a.state].filter(Boolean).join(', ') || '—'}</TableCell>
+                        <TableCell sx={{ textAlign: 'center' }}>
+                          {canEdit && (
+                            <Tooltip title="Edit">
+                              <IconButton size="small" onClick={() => openEdit('address', a)}>
+                                <EditIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
             )}
           </Paper>
         </Collapse>

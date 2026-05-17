@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Tabs,
@@ -11,10 +11,48 @@ import {
   Container,
   Alert,
   CircularProgress,
+  Divider,
 } from '@mui/material'
 import axios from 'axios'
+import { useGoogleLogin } from '@react-oauth/google'
 import { useAuth } from '@/context/AuthContext'
 import apiService from '@services/api'
+
+// Isolated component so useGoogleLogin hook only runs inside GoogleOAuthProvider
+interface GoogleButtonProps {
+  loading: boolean
+  onSuccess: (accessToken: string) => void
+  onError: (msg: string) => void
+  showDivider: boolean
+}
+
+const GoogleSignInButton: React.FC<GoogleButtonProps> = ({ loading, onSuccess, onError, showDivider }) => {
+  const googleLogin = useGoogleLogin({
+    flow: 'implicit',
+    prompt: 'select_account',
+    onSuccess: (tokenResponse) => onSuccess(tokenResponse.access_token),
+    onError: (error) => {
+      onError('Google sign-in was cancelled or failed. Please try again.')
+      console.error('Google login error:', error)
+    },
+  })
+
+  return (
+    <>
+      {showDivider && <Divider sx={{ my: 2 }}>OR</Divider>}
+      <Button
+        fullWidth
+        variant="outlined"
+        color="inherit"
+        size="large"
+        onClick={() => googleLogin()}
+        disabled={loading}
+      >
+        Continue with Google
+      </Button>
+    </>
+  )
+}
 
 const Login: React.FC = () => {
   const [mode, setMode] = useState<'login' | 'register'>('login')
@@ -35,8 +73,26 @@ const Login: React.FC = () => {
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [loading, setLoading] = useState(false)
-  const { login } = useAuth()
+  const { login, loginWithGoogle } = useAuth()
   const navigate = useNavigate()
+
+  const authMode = useMemo<'local' | 'hybrid' | 'google'>(() => {
+    const raw = String(import.meta.env.VITE_AUTH_MODE ?? 'local').trim().toLowerCase()
+    if (raw === 'google' || raw === 'hybrid' || raw === 'local') {
+      return raw
+    }
+    return 'local'
+  }, [])
+
+  const allowPassword = authMode !== 'google'
+  const hasGoogleClientId = !!(import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined)
+  const allowGoogle = authMode !== 'local' && hasGoogleClientId
+
+  useEffect(() => {
+    if (!allowPassword && mode === 'register') {
+      setMode('login')
+    }
+  }, [allowPassword, mode])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -110,6 +166,24 @@ const Login: React.FC = () => {
     }
   }
 
+  const handleGoogleSuccess = async (accessToken: string) => {
+    setLoading(true)
+    setError('')
+    try {
+      await loginWithGoogle(accessToken)
+      navigate('/dashboard')
+    } catch (err: any) {
+      const msg = err.message || 'Google sign-in failed.'
+      if (msg.toLowerCase().includes('pending') || msg.toLowerCase().includes('approval')) {
+        setError('Your account is pending administrator approval. Please contact your administrator.')
+      } else {
+        setError(msg)
+      }
+    } finally {
+      setLoading(false)
+    }
+  }
+
   return (
     <Container maxWidth="sm">
       <Box
@@ -127,59 +201,84 @@ const Login: React.FC = () => {
             🕌 Joula Login
           </Typography>
 
-          <Tabs
-            value={mode}
-            onChange={(_, value) => {
-              setMode(value)
-              setError('')
-              setSuccess('')
-              setDuplicateFields({ username: false, password: false, email: false })
-            }}
-            centered
-            sx={{ mb: 2 }}
-          >
-            <Tab label="Login" value="login" />
-            <Tab label="Create Account" value="register" />
-          </Tabs>
+          {allowPassword ? (
+            <Tabs
+              value={mode}
+              onChange={(_, value) => {
+                setMode(value)
+                setError('')
+                setSuccess('')
+                setDuplicateFields({ username: false, password: false, email: false })
+              }}
+              centered
+              sx={{ mb: 2 }}
+            >
+              <Tab label="Login" value="login" />
+              <Tab label="Create Account" value="register" />
+            </Tabs>
+          ) : (
+            <Alert severity="info" sx={{ mb: 2 }}>
+              Google-only mode is active.
+            </Alert>
+          )}
+
+          {authMode === 'hybrid' && (
+            <Alert severity="info" sx={{ mb: 2 }}>
+              Hybrid mode is active: you can debug with password login and roll out Google sign-in gradually.
+            </Alert>
+          )}
 
           {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
           {success && <Alert severity="success" sx={{ mb: 2 }}>{success}</Alert>}
 
           {mode === 'login' ? (
-            <form onSubmit={handleSubmit}>
-              <TextField
-                fullWidth
-                label="Email or Username"
-                type="text"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                margin="normal"
-                autoComplete="username"
-                required
-                disabled={loading}
-              />
-              <TextField
-                fullWidth
-                label="Password"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                margin="normal"
-                required
-                disabled={loading}
-              />
-              <Button
-                fullWidth
-                variant="contained"
-                color="primary"
-                size="large"
-                sx={{ mt: 3 }}
-                type="submit"
-                disabled={loading}
-              >
-                {loading ? <CircularProgress size={24} /> : 'Login'}
-              </Button>
-            </form>
+            <Box>
+              {allowPassword && (
+                <form onSubmit={handleSubmit}>
+                  <TextField
+                    fullWidth
+                    label="Email or Username"
+                    type="text"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    margin="normal"
+                    autoComplete="username"
+                    required
+                    disabled={loading}
+                  />
+                  <TextField
+                    fullWidth
+                    label="Password"
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    margin="normal"
+                    required
+                    disabled={loading}
+                  />
+                  <Button
+                    fullWidth
+                    variant="contained"
+                    color="primary"
+                    size="large"
+                    sx={{ mt: 3 }}
+                    type="submit"
+                    disabled={loading}
+                  >
+                    {loading ? <CircularProgress size={24} /> : 'Login'}
+                  </Button>
+                </form>
+              )}
+
+              {allowGoogle && (
+                <GoogleSignInButton
+                  loading={loading}
+                  onSuccess={handleGoogleSuccess}
+                  onError={(msg) => setError(msg)}
+                  showDivider={allowPassword}
+                />
+              )}
+            </Box>
           ) : (
             <form onSubmit={handleRegister}>
               <TextField

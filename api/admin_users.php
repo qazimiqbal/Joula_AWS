@@ -39,6 +39,17 @@ $action = isset($_GET['action']) ? $_GET['action'] : 'list';
 
 if ($action === 'list') {
     // List all users on the platform
+    $hasMaxEditors = false;
+    $chk = mysqli_query($con, "SHOW COLUMNS FROM organizations LIKE 'max_editors'");
+    if ($chk) { $hasMaxEditors = mysqli_num_rows($chk) > 0; mysqli_free_result($chk); }
+    $hasFreeAccount = false;
+    $chk2 = mysqli_query($con, "SHOW COLUMNS FROM organizations LIKE 'free_account'");
+    if ($chk2) { $hasFreeAccount = mysqli_num_rows($chk2) > 0; mysqli_free_result($chk2); }
+
+    $orgExtras = '';
+    if ($hasMaxEditors) $orgExtras .= ', COALESCE(o.max_editors, 1) AS max_editors, COALESCE(o.max_viewers, 3) AS max_viewers';
+    if ($hasFreeAccount) $orgExtras .= ', COALESCE(o.free_account, 0) AS free_account';
+
     $sql = "SELECT u.id, u.username, u.email,
                    COALESCE(u.phone, '') AS phone,
                    u.org_id,
@@ -51,6 +62,7 @@ if ($action === 'list') {
                     WHERE eu.org_id = u.org_id
                       AND eu.org_role IN ('editor','viewer')
                       AND eu.id != u.id) AS team_count
+                   {$orgExtras}
             FROM Login_user_AWS u
             LEFT JOIN organizations o ON o.id = u.org_id
             WHERE u.status = 'true'
@@ -77,6 +89,9 @@ if ($action === 'list') {
             'status'      => $row['status'],
             'masjidCount' => intval($row['masjid_count']),
             'teamCount'   => intval($row['team_count']),
+            'maxEditors'  => isset($row['max_editors'])  ? intval($row['max_editors'])  : 1,
+            'maxViewers'  => isset($row['max_viewers'])  ? intval($row['max_viewers'])  : 3,
+            'freeAccount' => isset($row['free_account']) ? (bool)$row['free_account']  : false,
         ];
     }
     mysqli_free_result($result);
@@ -226,6 +241,55 @@ if ($action === 'update_user') {
     mysqli_stmt_close($stmt);
 
     echo json_encode(['success' => true, 'affected' => $affected]);
+    exit;
+}
+
+if ($action === 'update_org_limits') {
+    $data = json_decode(file_get_contents('php://input'), true);
+    $orgId       = isset($data['orgId'])       ? intval($data['orgId'])       : 0;
+    $maxEditors  = isset($data['maxEditors'])  ? intval($data['maxEditors'])  : -1;
+    $maxViewers  = isset($data['maxViewers'])  ? intval($data['maxViewers'])  : -1;
+    $freeAccount = isset($data['freeAccount']) ? ($data['freeAccount'] ? 1 : 0) : -1;
+
+    if ($orgId <= 0) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'message' => 'orgId required']);
+        exit;
+    }
+
+    // Ensure free_account column exists
+    $hasFreeCol = false;
+    $chkFree = mysqli_query($con, "SHOW COLUMNS FROM organizations LIKE 'free_account'");
+    if ($chkFree) { $hasFreeCol = mysqli_num_rows($chkFree) > 0; mysqli_free_result($chkFree); }
+    if (!$hasFreeCol) {
+        mysqli_query($con, "ALTER TABLE organizations ADD COLUMN free_account TINYINT(1) NOT NULL DEFAULT 0");
+    }
+
+    $setClauses = [];
+    $types = '';
+    $params = [];
+    if ($maxEditors >= 0)  { $setClauses[] = 'max_editors = ?';  $types .= 'i'; $params[] = $maxEditors; }
+    if ($maxViewers >= 0)  { $setClauses[] = 'max_viewers = ?';  $types .= 'i'; $params[] = $maxViewers; }
+    if ($freeAccount >= 0) { $setClauses[] = 'free_account = ?'; $types .= 'i'; $params[] = $freeAccount; }
+
+    if (empty($setClauses)) {
+        echo json_encode(['success' => true, 'message' => 'Nothing to update']);
+        exit;
+    }
+
+    $types .= 'i';
+    $params[] = $orgId;
+    $stmt = mysqli_prepare($con, "UPDATE organizations SET " . implode(', ', $setClauses) . " WHERE id = ? LIMIT 1");
+    if (!$stmt) {
+        http_response_code(500);
+        echo json_encode(['success' => false, 'message' => mysqli_error($con)]);
+        exit;
+    }
+    mysqli_stmt_bind_param($stmt, $types, ...$params);
+    mysqli_stmt_execute($stmt);
+    mysqli_stmt_close($stmt);
+
+    echo json_encode(['success' => true]);
     exit;
 }
 

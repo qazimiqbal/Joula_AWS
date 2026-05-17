@@ -197,17 +197,19 @@ $hasOrgRole = has_column($con, $db, $loginTable, 'org_role');
 $hasPhone = has_column($con, $db, $loginTable, 'phone');
 $hasPermissions = has_column($con, $db, $loginTable, 'Permissions');
 $hasFreeUser = has_column($con, $db, $loginTable, 'is_free_user');
+$hasGoogleOnly = has_column($con, $db, $loginTable, 'google_only');
 
 $phoneExpr = $hasPhone ? 'phone' : "'' AS phone";
 $permissionsExpr = $hasPermissions ? 'Permissions' : "'' AS Permissions";
 $orgIdExpr = $hasOrgId ? 'org_id' : '0 AS org_id';
 $orgRoleExpr = $hasOrgRole ? "org_role" : "'viewer' AS org_role";
 $freeUserExpr = $hasFreeUser ? 'is_free_user' : '0 AS is_free_user';
+$googleOnlyExpr = $hasGoogleOnly ? 'google_only' : '0 AS google_only';
 
 $whereStatus = $hasStatus ? "status = 'true' AND " : "";
 
 // Schema-adaptive login query for Joula_AWS (works with and without subscription columns).
-$sql = "SELECT id, username, email, $phoneExpr, $permissionsExpr, $orgIdExpr, $orgRoleExpr, $freeUserExpr FROM `$loginTable` WHERE $whereStatus (username = ? OR username = ? OR email = ?) AND password = MD5(?) LIMIT 1";
+$sql = "SELECT id, username, email, $phoneExpr, $permissionsExpr, $orgIdExpr, $orgRoleExpr, $freeUserExpr, $googleOnlyExpr FROM `$loginTable` WHERE $whereStatus (username = ? OR username = ? OR email = ?) AND password = MD5(?) LIMIT 1";
 $stmt = mysqli_prepare($con, $sql);
 if (!$stmt) {
     respond(500, array('success' => false, 'message' => 'Failed to prepare login query: ' . mysqli_error($con)));
@@ -216,7 +218,7 @@ if (!$stmt) {
 $userRow = null;
 mysqli_stmt_bind_param($stmt, 'ssss', $identifier, $usernameCandidate, $identifier, $password);
 mysqli_stmt_execute($stmt);
-mysqli_stmt_bind_result($stmt, $id, $username, $email, $phone, $permissionsRaw, $orgId, $orgRole, $isFreeUserRaw);
+mysqli_stmt_bind_result($stmt, $id, $username, $email, $phone, $permissionsRaw, $orgId, $orgRole, $isFreeUserRaw, $googleOnlyRaw);
 if (mysqli_stmt_fetch($stmt)) {
     $userRow = array(
         'id' => $id,
@@ -227,11 +229,28 @@ if (mysqli_stmt_fetch($stmt)) {
         'org_id' => $orgId,
         'org_role' => $orgRole,
         'is_free_user' => $isFreeUserRaw,
+        'google_only' => $googleOnlyRaw,
     );
 }
 mysqli_stmt_close($stmt);
 
 if (!$userRow) {
+    if ($hasGoogleOnly) {
+        $googleOnlyCheckSql = "SELECT google_only FROM `$loginTable` WHERE $whereStatus (username = ? OR username = ? OR email = ?) LIMIT 1";
+        $googleOnlyStmt = mysqli_prepare($con, $googleOnlyCheckSql);
+        if ($googleOnlyStmt) {
+            mysqli_stmt_bind_param($googleOnlyStmt, 'sss', $identifier, $usernameCandidate, $identifier);
+            mysqli_stmt_execute($googleOnlyStmt);
+            $googleOnly = 0;
+            mysqli_stmt_bind_result($googleOnlyStmt, $googleOnly);
+            if (mysqli_stmt_fetch($googleOnlyStmt) && intval($googleOnly) === 1) {
+                mysqli_stmt_close($googleOnlyStmt);
+                respond(403, array('success' => false, 'message' => 'This account uses Google sign-in only. Please sign in with Google.'));
+            }
+            mysqli_stmt_close($googleOnlyStmt);
+        }
+    }
+
     respond(401, array('success' => false, 'message' => 'Invalid credentials'));
 }
 
@@ -257,30 +276,37 @@ $subscription = null;
 $orgId = isset($userRow['org_id']) ? intval($userRow['org_id']) : 0;
 if ($orgId > 0) {
     $stmtOrg = mysqli_prepare($con,
-        "SELECT plan_status, trial_ends_at FROM organizations WHERE id = ? LIMIT 1");
+        "SELECT plan_status, trial_ends_at, COALESCE(free_account, 0) AS free_account FROM organizations WHERE id = ? LIMIT 1");
     if ($stmtOrg) {
         mysqli_stmt_bind_param($stmtOrg, 'i', $orgId);
         mysqli_stmt_execute($stmtOrg);
         $planStatus = $trialEndsAt = null;
-        mysqli_stmt_bind_result($stmtOrg, $planStatus, $trialEndsAt);
+        $freeAccount = 0;
+        mysqli_stmt_bind_result($stmtOrg, $planStatus, $trialEndsAt, $freeAccount);
         if (mysqli_stmt_fetch($stmtOrg)) {
-            // Auto-expire trial
-            $now = new DateTime('now', new DateTimeZone('UTC'));
-            $trialEnd = new DateTime($trialEndsAt, new DateTimeZone('UTC'));
-            if ($planStatus === 'trial' && $now > $trialEnd) {
-                $planStatus = 'expired';
-                $expStmt = mysqli_prepare($con, "UPDATE organizations SET plan_status='expired' WHERE id=?");
-                mysqli_stmt_bind_param($expStmt, 'i', $orgId);
-                mysqli_stmt_execute($expStmt);
-                mysqli_stmt_close($expStmt);
+            if (!empty($freeAccount)) {
+                $planStatus = 'active';
+                $trialDaysLeft = 0;
+            } else {
+                // Auto-expire trial
+                $now = new DateTime('now', new DateTimeZone('UTC'));
+                $trialEnd = new DateTime($trialEndsAt, new DateTimeZone('UTC'));
+                if ($planStatus === 'trial' && $now > $trialEnd) {
+                    $planStatus = 'expired';
+                    $expStmt = mysqli_prepare($con, "UPDATE organizations SET plan_status='expired' WHERE id=?");
+                    mysqli_stmt_bind_param($expStmt, 'i', $orgId);
+                    mysqli_stmt_execute($expStmt);
+                    mysqli_stmt_close($expStmt);
+                }
+                $trialDaysLeft = max(0, (int)ceil(($trialEnd->getTimestamp() - $now->getTimestamp()) / 86400));
             }
-            $trialDaysLeft = max(0, (int)ceil(($trialEnd->getTimestamp() - $now->getTimestamp()) / 86400));
             $subscription = [
                 'orgId'        => $orgId,
                 'orgRole'      => $userRow['org_role'] ?? 'viewer',
                 'planStatus'   => $planStatus,
                 'trialEndsAt'  => $trialEndsAt,
                 'trialDaysLeft'=> $trialDaysLeft,
+                'freeAccount'  => !empty($freeAccount),
             ];
         }
         mysqli_stmt_close($stmtOrg);

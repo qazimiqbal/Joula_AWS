@@ -2,10 +2,12 @@ import React, { useEffect, useState } from 'react';
 import {
   Box, Card, CardHeader, CardContent, Typography, CircularProgress,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
-  Paper, Chip, IconButton, Tooltip, Stack,
+  Paper, Chip, IconButton, Tooltip, Stack, Dialog, DialogTitle,
+  DialogContent, DialogActions, Button, TextField, FormControlLabel, Switch, Alert,
 } from '@mui/material';
 import MosqueIcon from '@mui/icons-material/Mosque';
 import PeopleIcon from '@mui/icons-material/People';
+import EditIcon from '@mui/icons-material/Edit';
 import NavigateBeforeIcon from '@mui/icons-material/NavigateBefore';
 import NavigateNextIcon from '@mui/icons-material/NavigateNext';
 import apiService from '@/services/api';
@@ -26,6 +28,18 @@ interface AdminUser {
   status: string;
   masjidCount: number;
   teamCount: number;
+  maxEditors: number;
+  maxViewers: number;
+  freeAccount: boolean;
+}
+
+interface LimitsDialogState {
+  user: AdminUser;
+  maxEditors: number;
+  maxViewers: number;
+  freeAccount: boolean;
+  saving: boolean;
+  error: string;
 }
 
 const ViewUsers: React.FC = () => {
@@ -37,6 +51,7 @@ const ViewUsers: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [page, setPage] = useState(0);
+  const [limitsDialog, setLimitsDialog] = useState<LimitsDialogState | null>(null);
 
   useEffect(() => {
     if (permissionLevel < 4) {
@@ -57,6 +72,34 @@ const ViewUsers: React.FC = () => {
       setError('Failed to load users');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const openLimitsDialog = (u: AdminUser) => {
+    setLimitsDialog({ user: u, maxEditors: u.maxEditors ?? 1, maxViewers: u.maxViewers ?? 3, freeAccount: u.freeAccount ?? false, saving: false, error: '' });
+  };
+
+  const saveLimits = async () => {
+    if (!limitsDialog) return;
+    setLimitsDialog((d) => d ? { ...d, saving: true, error: '' } : d);
+    try {
+      const API_BASE = import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? '' : '/Joula');
+      const token = localStorage.getItem('authToken');
+      const res = await fetch(`${API_BASE}/api/admin_users.php?action=update_org_limits`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ orgId: limitsDialog.user.orgId, maxEditors: limitsDialog.maxEditors, maxViewers: limitsDialog.maxViewers, freeAccount: limitsDialog.freeAccount }),
+      });
+      const json = await res.json();
+      if (!json.success) throw new Error(json.message || 'Save failed');
+      setUsers((prev) => prev.map((u) =>
+        u.id === limitsDialog.user.id
+          ? { ...u, maxEditors: limitsDialog.maxEditors, maxViewers: limitsDialog.maxViewers, freeAccount: limitsDialog.freeAccount }
+          : u
+      ));
+      setLimitsDialog(null);
+    } catch (err) {
+      setLimitsDialog((d) => d ? { ...d, saving: false, error: err instanceof Error ? err.message : 'Save failed' } : d);
     }
   };
 
@@ -90,6 +133,7 @@ const ViewUsers: React.FC = () => {
                       <TableCell>Role</TableCell>
                       <TableCell align="center">Masjids</TableCell>
                       <TableCell align="center">Team</TableCell>
+                      <TableCell align="center">Limits</TableCell>
                       <TableCell>Actions</TableCell>
                     </TableRow>
                   </TableHead>
@@ -113,6 +157,16 @@ const ViewUsers: React.FC = () => {
                         <TableCell align="center">
                           <Chip label={u.teamCount} size="small" color={u.teamCount > 0 ? 'secondary' : 'default'} />
                         </TableCell>
+                        <TableCell align="center">
+                          {u.orgId > 0 ? (
+                            <Stack direction="row" spacing={0.5} justifyContent="center" alignItems="center">
+                              {u.freeAccount && <Chip label="FREE" size="small" color="success" />}
+                              <Typography variant="caption" color="text.secondary">
+                                E:{u.maxEditors ?? 1} V:{u.maxViewers ?? 3}
+                              </Typography>
+                            </Stack>
+                          ) : '—'}
+                        </TableCell>
                         <TableCell>
                           <Tooltip title="View Masjids">
                             <IconButton size="small" color="primary"
@@ -126,6 +180,13 @@ const ViewUsers: React.FC = () => {
                               <PeopleIcon fontSize="small" />
                             </IconButton>
                           </Tooltip>
+                          {u.orgId > 0 && u.permissions < 4 && (
+                            <Tooltip title="Edit Seat Limits">
+                              <IconButton size="small" color="inherit" onClick={() => openLimitsDialog(u)}>
+                                <EditIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                          )}
                         </TableCell>
                       </TableRow>
                     ))}
@@ -147,6 +208,46 @@ const ViewUsers: React.FC = () => {
           )}
         </CardContent>
       </Card>
+
+      {/* Edit Seat Limits Dialog */}
+      <Dialog open={!!limitsDialog} onClose={() => setLimitsDialog(null)} maxWidth="xs" fullWidth>
+        <DialogTitle>Edit Seat Limits — {limitsDialog?.user.username}</DialogTitle>
+        <DialogContent>
+          {limitsDialog?.error && <Alert severity="error" sx={{ mb: 2 }}>{limitsDialog.error}</Alert>}
+          <Stack spacing={2} sx={{ mt: 1 }}>
+            <TextField
+              label="Max Editors"
+              type="number"
+              inputProps={{ min: 0 }}
+              value={limitsDialog?.maxEditors ?? 1}
+              onChange={(e) => setLimitsDialog((d) => d ? { ...d, maxEditors: Math.max(0, parseInt(e.target.value) || 0) } : d)}
+            />
+            <TextField
+              label="Max Viewers"
+              type="number"
+              inputProps={{ min: 0 }}
+              value={limitsDialog?.maxViewers ?? 3}
+              onChange={(e) => setLimitsDialog((d) => d ? { ...d, maxViewers: Math.max(0, parseInt(e.target.value) || 0) } : d)}
+            />
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={limitsDialog?.freeAccount ?? false}
+                  onChange={(e) => setLimitsDialog((d) => d ? { ...d, freeAccount: e.target.checked } : d)}
+                  color="success"
+                />
+              }
+              label="Free Account (bypass subscription)"
+            />
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setLimitsDialog(null)} disabled={limitsDialog?.saving}>Cancel</Button>
+          <Button variant="contained" onClick={saveLimits} disabled={limitsDialog?.saving}>
+            {limitsDialog?.saving ? 'Saving…' : 'Save'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 };

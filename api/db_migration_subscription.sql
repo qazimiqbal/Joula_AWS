@@ -15,9 +15,11 @@ CREATE TABLE IF NOT EXISTS organizations (
     plan_status            ENUM('trial','active','past_due','cancelled','expired')
                            NOT NULL DEFAULT 'trial',
     trial_ends_at          DATETIME      NOT NULL,
-    -- Seat limits (configurable per org in future)
-    max_editors            INT           NOT NULL DEFAULT 3,
-    max_viewers            INT           NOT NULL DEFAULT 10,
+    -- Seat limits (configurable per org by super admin)
+    max_editors            INT           NOT NULL DEFAULT 1,
+    max_viewers            INT           NOT NULL DEFAULT 3,
+    -- Free account flag (set by super admin to bypass subscription checks)
+    free_account           TINYINT(1)    NOT NULL DEFAULT 0,
     -- Monthly price in cents (e.g. 2999 = $29.99)
     monthly_price_cents    INT           NOT NULL DEFAULT 2999,
     -- Stripe price ID for the product (set after Stripe product is created)

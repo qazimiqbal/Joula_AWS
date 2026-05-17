@@ -17,6 +17,7 @@ const SubscriptionBanner: React.FC = () => {
   if (permissionLevel >= 4) return null
 
   if (!subscription) return null
+  if (subscription.freeAccount) return null
   if (subscription.planStatus === 'active') return null
 
   let severity: 'info' | 'warning' | 'error' = 'info'

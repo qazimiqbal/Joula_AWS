@@ -77,7 +77,7 @@ const CreateFreeUser: React.FC = () => {
         ← Back to Dashboard
       </Button>
       <Card>
-        <CardHeader title="Add Free Editor User" subheader="Creates a free user with editor (permission 2) access — no subscription required." />
+        <CardHeader title="Add Free Editor User" subheader="Creates a free user with editor access and no subscription required." />
         <CardContent>
           {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
           {success && <Alert severity="success" sx={{ mb: 2 }}>{success}</Alert>}

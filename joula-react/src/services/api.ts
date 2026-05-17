@@ -228,9 +228,16 @@ class ApiService {
       (error: AxiosError) => {
         if (error.response?.status === 401) {
           const requestUrl = error.config?.url || ''
-          const isLoginRequest = requestUrl.includes('/api/login.php')
+          const isLoginRequest = requestUrl.includes('/api/login.php') || requestUrl.includes('/api/google_login.php')
+          const message = String((error.response.data as { message?: string } | undefined)?.message || '').toLowerCase()
+          const looksLikeTokenFailure =
+            message.includes('invalid token') ||
+            message.includes('missing token') ||
+            message.includes('auth token') ||
+            message.includes('session expired') ||
+            message.includes('not logged in')
 
-          if (!isLoginRequest) {
+          if (!isLoginRequest && looksLikeTokenFailure) {
             localStorage.removeItem('authToken')
             localStorage.removeItem('user')
             window.location.href = import.meta.env.BASE_URL
@@ -248,6 +255,14 @@ class ApiService {
       return response.data.data
     }
     throw new Error(response.data.message || 'Login failed')
+  }
+
+  async googleLogin(idToken: string): Promise<AuthResponse> {
+    const response = await this.api.post<ApiResponse<AuthResponse>>('/api/google_login.php', { idToken })
+    if (response.data.data) {
+      return response.data.data
+    }
+    throw new Error(response.data.message || 'Google login failed')
   }
 
   async logout(): Promise<void> {
@@ -810,7 +825,6 @@ class ApiService {
   async createTeamUser(data: CreateTeamUserRequest): Promise<void> {
     const response = await this.api.post<{ success: boolean; message?: string }>('/api/create_team_user.php', {
       username: data.username,
-      password: data.password,
       email: data.email,
       phone: data.phone,
       orgRole: data.role,

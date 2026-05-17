@@ -69,9 +69,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
 
     $stmt = mysqli_prepare($con,
         "SELECT u.org_id, u.org_role,
-                o.id, o.name, o.plan_status, o.trial_ends_at,
-                o.stripe_customer_id, o.stripe_subscription_id,
-                o.max_editors, o.max_viewers, o.monthly_price_cents
+            o.id, o.name, o.plan_status, o.trial_ends_at,
+            o.stripe_customer_id, o.stripe_subscription_id,
+            o.max_editors, o.max_viewers, o.monthly_price_cents,
+            COALESCE(o.free_account, 0) AS free_account
          FROM Login_user_AWS u
          LEFT JOIN organizations o ON o.id = u.org_id
          WHERE u.id = ? LIMIT 1");
@@ -82,18 +83,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         $orgId, $orgRole,
         $oId, $oName, $planStatus, $trialEndsAt,
         $stripeCustomerId, $stripeSubscriptionId,
-        $maxEditors, $maxViewers, $monthlyCents);
+        $maxEditors, $maxViewers, $monthlyCents, $freeAccount);
     if (mysqli_stmt_fetch($stmt)) {
         $row = compact(
             'orgId','orgRole','oId','oName','planStatus','trialEndsAt',
             'stripeCustomerId','stripeSubscriptionId',
-            'maxEditors','maxViewers','monthlyCents'
+            'maxEditors','maxViewers','monthlyCents','freeAccount'
         );
     }
     mysqli_stmt_close($stmt);
 
     if (!$row || !$row['orgId']) {
         respond(404, ['success' => false, 'message' => 'No organization found for this user']);
+    }
+
+    // Free accounts are treated as permanently active — skip trial/expiry checks
+    if (!empty($row['freeAccount'])) {
+        respond(200, [
+            'success' => true,
+            'data' => [
+                'orgId'                  => intval($row['orgId']),
+                'orgName'                => $row['oName'],
+                'orgRole'                => $row['orgRole'],
+                'planStatus'             => 'active',
+                'trialEndsAt'            => $row['trialEndsAt'],
+                'trialDaysLeft'          => 0,
+                'hasPaymentMethod'       => !empty($row['stripeSubscriptionId']),
+                'freeAccount'            => true,
+                'maxEditors'             => intval($row['maxEditors']),
+                'maxViewers'             => intval($row['maxViewers']),
+                'monthlyPriceCents'      => 0,
+                'stripePublishableKey'   => STRIPE_PUBLISHABLE_KEY,
+            ]
+        ]);
     }
 
     // Auto-expire trial if date has passed and still marked as trial
@@ -120,6 +142,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
             'trialEndsAt'            => $row['trialEndsAt'],
             'trialDaysLeft'          => $trialDaysLeft,
             'hasPaymentMethod'       => !empty($row['stripeSubscriptionId']),
+                        'freeAccount'            => !empty($row['freeAccount']),
             'maxEditors'             => intval($row['maxEditors']),
             'maxViewers'             => intval($row['maxViewers']),
             'monthlyPriceCents'      => intval($row['monthlyCents']),
