@@ -28,11 +28,14 @@ export default defineConfig(({ mode }) => {
             if (res && !res.headersSent) {
               (res as any).writeHead(502, { 'Content-Type': 'application/json' });
               (res as any).end(JSON.stringify({ error: 'Proxy error', detail: err.message }));
-            }
-          });
-        },
-      },
-      // US Census geocoder proxy for local development fallback
+
+            export default defineConfig(({ mode }) => {
+              const env = loadEnv(mode, process.cwd(), '')
+              // Use AWS Lightsail dev server for development, production for others
+              const apiProxyTarget = mode === 'development'
+                ? 'http://3.133.53.66/Joula'
+                : (env.VITE_API_PROXY_TARGET || 'https://myjoula.com/Joula');
+              const isLocalPhpApi = /^https?:\/\/(localhost|127\\.0\\.0\\.1):8000/.test(apiProxyTarget)
       '/census': {
         target: 'https://geocoding.geo.census.gov',
         changeOrigin: true,
