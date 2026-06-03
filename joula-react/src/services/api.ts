@@ -1,7 +1,7 @@
 import axios, { AxiosInstance, AxiosError } from 'axios'
 import { ApiResponse, User, Masjid, AddressRecord, LoginRequest, AuthResponse, PrayerTime, RegisterRequest, PendingUser, CreateAddressRequest, MissingCoordinatesRecord, PendingGeocodeRecord, SubscriptionInfo, OrgUsersResponse, ImportAddressesResponse, CreateMasjidRequest, PendingMasjidRecord, CreateTeamUserRequest } from '@/types'
 
-const API_BASE_URL = import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? 'http://localhost:8000' : '/Joula')
+const API_BASE_URL = import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? 'http://localhost:8000' : '/Joula/api')
 
 interface LegacyAddress {
   ID: string

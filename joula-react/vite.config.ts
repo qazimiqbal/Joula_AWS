@@ -4,11 +4,13 @@ import path from 'path'
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
-  const apiProxyTarget = env.VITE_API_PROXY_TARGET || 'https://myjoula.com/Joula'
+  const rawBase = (env.VITE_APP_BASE || '/').trim()
+  const appBase = rawBase === '/' ? '/' : `/${rawBase.replace(/^\/+|\/+$/g, '')}/`
+  const apiProxyTarget = env.VITE_API_PROXY_TARGET || 'https://myjoula.com'
   const isLocalPhpApi = /^https?:\/\/(localhost|127\.0\.0\.1):8000/.test(apiProxyTarget)
 
   return {
-    base: '/Joula/',
+    base: appBase,
     plugins: [react()],
     server: {
       port: 3000,
