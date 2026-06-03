@@ -12,7 +12,7 @@ if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
     exit;
 }
 
-include('db.php');
+require_once 'db.pgsql.php';
 
 function permission_to_level($permissionRaw)
 {
@@ -25,28 +25,19 @@ function permission_to_level($permissionRaw)
     return 0;
 }
 
-function get_auth_user($con)
+function get_auth_user($pdo)
 {
     $authHeader = isset($_SERVER['HTTP_AUTHORIZATION']) ? $_SERVER['HTTP_AUTHORIZATION'] : '';
     if (strpos($authHeader, 'Bearer ') !== 0) return null;
     $token = substr($authHeader, 7);
-
-    $stmt = mysqli_prepare($con, "SELECT id, Permissions FROM Login_user_AWS WHERE auth_token = ? AND status = 'true' LIMIT 1");
-    if (!$stmt) return null;
-
-    mysqli_stmt_bind_param($stmt, 's', $token);
-    mysqli_stmt_execute($stmt);
-    $id = null;
-    $permissions = null;
-    mysqli_stmt_bind_result($stmt, $id, $permissions);
-    $found = mysqli_stmt_fetch($stmt);
-    mysqli_stmt_close($stmt);
-
-    if (!$found || !$id) return null;
-
+    $sql = 'SELECT id, permissions FROM "Login_user_AWS" WHERE auth_token = :token AND status = :status LIMIT 1';
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute([':token' => $token, ':status' => 'true']);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$row) return null;
     return [
-        'id' => intval($id),
-        'permissionLevel' => permission_to_level($permissions),
+        'id' => intval($row['id']),
+        'permissionLevel' => permission_to_level($row['permissions']),
     ];
 }
 
@@ -87,7 +78,7 @@ function get_key_from_sources()
     ];
 }
 
-$user = get_auth_user($con);
+$user = get_auth_user($pdo);
 if (!$user) {
     http_response_code(401);
     echo json_encode(['success' => false, 'message' => 'Unauthorized']);

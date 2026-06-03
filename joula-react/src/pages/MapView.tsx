@@ -48,10 +48,10 @@ const makeCircleSvgUrl = (color: string): string =>
 
 const makeCurrentLocationSvgUrl = (): string =>
   `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(
-    `<svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 44 44">
-      <circle cx="22" cy="22" r="19" fill="#00c853" fill-opacity="0.2"/>
-      <circle cx="22" cy="22" r="12" fill="#00e676" stroke="#ffffff" stroke-width="3"/>
-      <circle cx="22" cy="22" r="4" fill="#0b3d91"/>
+    `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+      <polygon points="16,4 19.2,11.1 27,12 21.3,17.1 22.8,24.6 16,20.6 9.2,24.6 10.7,17.1 5,12 12.8,11.1"
+        fill="#111111" stroke="#ffffff" stroke-width="1.6"/>
+      <circle cx="16" cy="16" r="1.8" fill="#000000"/>
     </svg>`
   )}`
 
@@ -73,6 +73,7 @@ const MapView: React.FC = () => {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null)
+  const [showMasjids, setShowMasjids] = useState(false)
   const [mapCenter, setMapCenter] = useState(DEFAULT_CENTER)
   const [reviewMarker, setReviewMarker] = useState<{ lat: number; lng: number; id?: string; name?: string; type?: 'masjid' | 'address' } | null>(null)
   const [reviewMarkers, setReviewMarkers] = useState<PendingGeocodeRecord[]>([])
@@ -112,8 +113,8 @@ const MapView: React.FC = () => {
     if (!isLoaded) return makeCurrentLocationSvgUrl()
     return {
       url: makeCurrentLocationSvgUrl(),
-      scaledSize: new window.google.maps.Size(44, 44),
-      anchor: new window.google.maps.Point(22, 22),
+      scaledSize: new window.google.maps.Size(32, 32),
+      anchor: new window.google.maps.Point(16, 16),
     }
   }, [isLoaded])
 
@@ -129,6 +130,19 @@ const MapView: React.FC = () => {
         // Keep map usable even if location permission is denied.
       }
     )
+  }, [searchParams])
+
+  useEffect(() => {
+    const allMasjidsParam = searchParams.get('allMasjids')
+    const showMasjidsParam = searchParams.get('showMasjids')
+    if (showMasjidsParam === '0') {
+      setShowMasjids(false)
+    } else if (showMasjidsParam === '1') {
+      setShowMasjids(true)
+    } else {
+      // Keep masjid-only map routes useful while hiding masjids by default elsewhere.
+      setShowMasjids(allMasjidsParam === '1')
+    }
   }, [searchParams])
 
   useEffect(() => {
@@ -157,9 +171,7 @@ const MapView: React.FC = () => {
       setReviewMarkers([])
       const addrParams: { mine?: boolean; masjidId?: number } = { mine: mineParam }
       if (masjidIdParam) addrParams.masjidId = Number(masjidIdParam)
-      const masjidPromise = showMasjidsParam
-        ? apiService.getMasjids(mineParam ? { mine: true } : {})
-        : Promise.resolve([] as Masjid[])
+      const masjidPromise = apiService.getMasjids(mineParam ? { mine: true } : {})
       Promise.all([apiService.getAddresses(addrParams), masjidPromise]).then(([addressData, masjidData]) => {
         setAddresses(addressData)
         setMasjids(masjidData)
@@ -387,7 +399,17 @@ const MapView: React.FC = () => {
         </Box>
       )}
 
-      <Box sx={{ flex: 1, minHeight: 0 }}>
+      <Box sx={{ flex: 1, minHeight: 0, position: 'relative' }}>
+        <Box sx={{ position: 'absolute', top: 12, right: 12, zIndex: 2 }}>
+          <Button
+            variant="contained"
+            size="small"
+            onClick={() => setShowMasjids((current) => !current)}
+            sx={{ textTransform: 'none', fontWeight: 700 }}
+          >
+            {showMasjids ? 'Hide Masjids' : 'Show Masjids'}
+          </Button>
+        </Box>
         {!isLoaded ? (
           <Box display="flex" justifyContent="center" alignItems="center" height="100%">
             <CircularProgress />
@@ -404,13 +426,12 @@ const MapView: React.FC = () => {
               <>
                 <Circle
                   center={userLocation}
-                  radius={175}
+                  radius={120}
                   options={{
-                    strokeColor: '#00c853',
-                    strokeOpacity: 0.95,
-                    strokeWeight: 2,
-                    fillColor: '#00e676',
-                    fillOpacity: 0.14,
+                    strokeOpacity: 0,
+                    strokeWeight: 0,
+                    fillColor: '#7DFF8A',
+                    fillOpacity: 0.18,
                   }}
                 />
                 <Marker
@@ -464,7 +485,7 @@ const MapView: React.FC = () => {
             ))}
 
             {/* Masjid markers */}
-            {masjids
+            {showMasjids && masjids
               .filter((m) => typeof m.latitude === 'number' && typeof m.longitude === 'number')
               .map((masjid) => {
                 const masjidAddress = [masjid.aptNo, masjid.houseNo, masjid.streetName, masjid.city, masjid.state, masjid.zip]

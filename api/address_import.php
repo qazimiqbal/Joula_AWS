@@ -1,4 +1,5 @@
 <?php
+include_once __DIR__ . '/cors.php';
 header('Content-Type: application/json');
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: POST, OPTIONS');
@@ -15,7 +16,7 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     exit;
 }
 
-include('db.php');
+require_once 'db.pgsql.php';
 
 function permission_to_level($permissionRaw) {
         $value = trim((string)$permissionRaw);
@@ -27,7 +28,7 @@ function permission_to_level($permissionRaw) {
         return 0;
 }
 
-function enforce_address_access($con, $permissionLevel, $orgId) {
+function enforce_address_access($pdo, $permissionLevel, $orgId) {
     if ($permissionLevel < 2) {
         http_response_code(403);
         echo json_encode(array('success' => false, 'message' => 'Only admins and editors can import addresses'));
@@ -45,13 +46,13 @@ function enforce_address_access($con, $permissionLevel, $orgId) {
     }
 
     $safeOrgId = intval($orgId);
-    $subResult = mysqli_query($con, "SELECT plan_status, trial_ends_at FROM organizations WHERE id = $safeOrgId LIMIT 1");
-    if (!$subResult) {
+    $stmt = $pdo->prepare('SELECT plan_status, trial_ends_at FROM organizations WHERE id = :id LIMIT 1');
+    $stmt->execute([':id' => $safeOrgId]);
+    $subRow = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$subRow) {
         // Cannot verify subscription — allow access
         return;
     }
-    $subRow = mysqli_fetch_assoc($subResult);
-    mysqli_free_result($subResult);
 
     if (!$subRow) {
         http_response_code(403);
@@ -68,7 +69,7 @@ function enforce_address_access($con, $permissionLevel, $orgId) {
             $now      = new DateTime('now', new DateTimeZone('UTC'));
             $trialEnd = new DateTime((string)$trialEndsAt, new DateTimeZone('UTC'));
             if ($now > $trialEnd) {
-                mysqli_query($con, "UPDATE organizations SET plan_status = 'expired' WHERE id = $safeOrgId");
+                $pdo->prepare('UPDATE organizations SET plan_status = :status WHERE id = :id')->execute([':status' => 'expired', ':id' => $safeOrgId]);
                 $normalized = 'expired';
             }
         } catch (Exception $e) {
@@ -83,71 +84,50 @@ function enforce_address_access($con, $permissionLevel, $orgId) {
     }
 }
 
-function resolve_effective_owner_id($con, $userId, $orgId, $permissionLevel) {
-        if ($permissionLevel >= 3 || $orgId <= 0) {
-                return intval($userId);
-        }
-
-        $ownerStmt = mysqli_prepare(
-                $con,
-                "SELECT id
-                 FROM Login_user_AWS
-                 WHERE org_id = ?
-                     AND status = 'true'
-                     AND (org_role = 'org_admin' OR org_role = 'admin' OR Permissions = '3' OR Permissions = '4')
-                 ORDER BY
-                     CASE
-                         WHEN org_role = 'org_admin' THEN 0
-                         WHEN org_role = 'admin' THEN 1
-                         ELSE 2
-                     END,
-                     id ASC
-                 LIMIT 1"
-        );
-        if (!$ownerStmt) return intval($userId);
-        mysqli_stmt_bind_param($ownerStmt, 'i', $orgId);
-        mysqli_stmt_execute($ownerStmt);
-        $ownerId = null;
-        mysqli_stmt_bind_result($ownerStmt, $ownerId);
-        $found = mysqli_stmt_fetch($ownerStmt);
-        mysqli_stmt_close($ownerStmt);
-
-        return ($found && $ownerId) ? intval($ownerId) : intval($userId);
+function resolve_effective_owner_id($pdo, $userId, $orgId, $permissionLevel) {
+    if ($permissionLevel >= 3 || $orgId <= 0) {
+        return intval($userId);
+    }
+    $sql = 'SELECT id FROM "Login_user_AWS" WHERE org_id = :orgId AND status = :status AND (org_role = :orgAdmin OR org_role = :admin OR permissions = :perm3 OR permissions = :perm4) ORDER BY CASE WHEN org_role = :orgAdmin THEN 0 WHEN org_role = :admin THEN 1 ELSE 2 END, id ASC LIMIT 1';
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute([
+        ':orgId' => $orgId,
+        ':status' => 'true',
+        ':orgAdmin' => 'org_admin',
+        ':admin' => 'admin',
+        ':perm3' => '3',
+        ':perm4' => '4',
+    ]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    return ($row && isset($row['id'])) ? intval($row['id']) : intval($userId);
 }
 
 // ---------------------------------------------------------------
 // Auth — any authenticated user may import; we record who they are
 // ---------------------------------------------------------------
-function get_auth_user_for_import($con) {
+function get_auth_user_for_import($pdo) {
     $authHeader = isset($_SERVER['HTTP_AUTHORIZATION']) ? $_SERVER['HTTP_AUTHORIZATION'] : '';
     if (strpos($authHeader, 'Bearer ') !== 0) return null;
     $token = substr($authHeader, 7);
 
-    $stmt = mysqli_prepare($con,
-        "SELECT id, Permissions, org_id FROM Login_user_AWS
-         WHERE auth_token = ? AND status = 'true' LIMIT 1");
-    if (!$stmt) return null;
-    mysqli_stmt_bind_param($stmt, 's', $token);
-    mysqli_stmt_execute($stmt);
-    $userId = null;
-    $perms  = null;
-    $orgId  = null;
-    mysqli_stmt_bind_result($stmt, $userId, $perms, $orgId);
-    $found = mysqli_stmt_fetch($stmt);
-    mysqli_stmt_close($stmt);
-    if (!$found || !$userId) return null;
-    return ['id' => intval($userId), 'permissions' => (string)$perms, 'org_id' => intval($orgId)];
+    $sql = 'SELECT id, permissions, org_id FROM "Login_user_AWS" WHERE auth_token = :token AND status = :status LIMIT 1';
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute([':token' => $token, ':status' => 'true']);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$row) return null;
+    return ['id' => intval($row['id']), 'permissions' => (string)$row['permissions'], 'org_id' => intval($row['org_id'])];
 }
 
-$authUser = get_auth_user_for_import($con);
+// Use PDO for all DB actions
+$authUser = get_auth_user_for_import($pdo);
 if (!$authUser) {
     http_response_code(401);
     echo json_encode(['success' => false, 'message' => 'Unauthorized']);
     exit;
 }
 $permissionLevel = permission_to_level($authUser['permissions']);
-enforce_address_access($con, $permissionLevel, intval($authUser['org_id']));
-$uploadedBy = resolve_effective_owner_id($con, intval($authUser['id']), intval($authUser['org_id']), permission_to_level($authUser['permissions']));
+enforce_address_access($pdo, $permissionLevel, intval($authUser['org_id']));
+$uploadedBy = resolve_effective_owner_id($pdo, intval($authUser['id']), intval($authUser['org_id']), permission_to_level($authUser['permissions']));
 $uploadedByOrgId = $authUser['org_id'];
 $selectedMasjid = isset($_POST['masjid']) ? trim($_POST['masjid']) : '';
 $validateOnly = isset($_POST['validateOnly']) && $_POST['validateOnly'] === '1';
@@ -159,25 +139,12 @@ if ($selectedMasjid === '') {
     exit;
 }
 
-$masjidStmt = mysqli_prepare($con, 'SELECT m.ID
-    FROM Masjids_AWS m
-    INNER JOIN Login_user_AWS owner ON owner.id = m.Created_by
-    WHERE m.Name = ?
-      AND COALESCE(m.`Clear`, 1) = 1
-      AND (m.Created_by = ? OR (? > 0 AND owner.org_id = ?))
-    LIMIT 1');
-if (!$masjidStmt) {
-    http_response_code(500);
-    echo json_encode(['success' => false, 'message' => 'Failed to validate masjid: ' . mysqli_error($con)]);
-    exit;
-}
-mysqli_stmt_bind_param($masjidStmt, 'siii', $selectedMasjid, $uploadedBy, $uploadedByOrgId, $uploadedByOrgId);
-mysqli_stmt_execute($masjidStmt);
-mysqli_stmt_bind_result($masjidStmt, $masjidId);
-$hasApprovedMasjid = mysqli_stmt_fetch($masjidStmt);
-mysqli_stmt_close($masjidStmt);
-
-if (!$hasApprovedMasjid) {
+// Validate masjid
+$masjidSql = 'SELECT m."ID" FROM "Masjids_AWS" m INNER JOIN "Login_user_AWS" owner ON owner."id" = m."Created_by" WHERE m."Name" = :name AND COALESCE(m."Clear", 1) = 1 AND (m."Created_by" = :createdBy OR (:orgId > 0 AND owner."org_id" = :orgId)) LIMIT 1';
+$masjidStmt = $pdo->prepare($masjidSql);
+$masjidStmt->execute([':name' => $selectedMasjid, ':createdBy' => $uploadedBy, ':orgId' => $uploadedByOrgId]);
+$masjidRow = $masjidStmt->fetch(PDO::FETCH_ASSOC);
+if (!$masjidRow) {
     http_response_code(400);
     echo json_encode(['success' => false, 'message' => 'Select one of your approved masjids before importing addresses']);
     exit;
@@ -214,7 +181,7 @@ if (!$handle) {
 // ---------------------------------------------------------------
 // Parse header row
 // ---------------------------------------------------------------
-$rawHeaders = fgetcsv($handle);
+$rawHeaders = fgetcsv($handle, 0, ',', '"', '\\');
 if ($rawHeaders === false) {
     fclose($handle);
     http_response_code(400);
@@ -307,17 +274,52 @@ function col($row, $colIndex, $name) {
         : '';
 }
 
-// Prepare duplicate-check statement
-$dupSql = 'SELECT ID FROM Addresses_AWS
-           WHERE Name = ? AND H_No = ? AND St_Name = ? AND City = ? AND State = ? AND Zip = ?
-           LIMIT 1';
-$dupStmt = mysqli_prepare($con, $dupSql);
-if (!$dupStmt) {
-    fclose($handle);
-    http_response_code(500);
-    echo json_encode(['success' => false, 'message' => 'Failed to prepare duplicate check: ' . mysqli_error($con)]);
-    exit;
+function normalize_last_visit($rawValue, $fallbackDate) {
+    $value = trim((string)$rawValue);
+    if ($value === '') {
+        return $fallbackDate;
+    }
+
+    $upper = strtoupper($value);
+    if (in_array($upper, ['NA', 'N/A', 'NULL', 'NONE', '-', '--'], true)) {
+        return $fallbackDate;
+    }
+
+    // Handle Excel-style serial date values (e.g. 45123)
+    if (preg_match('/^\d+(?:\.\d+)?$/', $value)) {
+        $serial = (float)$value;
+        if ($serial > 0) {
+            $days = (int)floor($serial);
+            $base = new DateTime('1899-12-30', new DateTimeZone('UTC'));
+            $base->modify('+' . $days . ' days');
+            $year = (int)$base->format('Y');
+            if ($year >= 1900 && $year <= 2100) {
+                return $base->format('Y-m-d');
+            }
+        }
+        return $fallbackDate;
+    }
+
+    $parsed = date_create_from_format('Y-m-d', $value)
+           ?: date_create_from_format('m/d/Y', $value)
+           ?: date_create_from_format('n/j/Y', $value);
+
+    if (!$parsed) {
+        return $fallbackDate;
+    }
+
+    $year = (int)$parsed->format('Y');
+    if ($year < 1900 || $year > 2100) {
+        return $fallbackDate;
+    }
+
+    return $parsed->format('Y-m-d');
 }
+
+// Prepare duplicate-check statement
+// Prepare duplicate-check statement (PDO)
+$dupSql = 'SELECT "ID" FROM "Addresses_AWS" WHERE "Name" = :name AND "H_No" = :hno AND "St_Name" = :stname AND "City" = :city AND "State" = :state AND "Zip" = :zip LIMIT 1';
+$dupStmt = $pdo->prepare($dupSql);
 
 // ---------------------------------------------------------------
 // Process rows
@@ -329,12 +331,13 @@ $validRows = [];
 $rowNum   = 1; // header was row 1; data starts at row 2
 
 $defaultClear       = 0;
+$defaultStatus      = 'pending';
 $defaultVerified    = 'N';
 $defaultMasjid      = $selectedMasjid;
 $defaultCoordinates = '';
 $todayDate          = date('Y-m-d');
 
-while (($row = fgetcsv($handle)) !== false) {
+while (($row = fgetcsv($handle, 0, ',', '"', '\\')) !== false) {
     $rowNum++;
 
     // Skip completely blank rows
@@ -392,25 +395,19 @@ while (($row = fgetcsv($handle)) !== false) {
         }
     }
 
-    // Sanitise last_visit — accept YYYY-MM-DD or common US formats
-    $lastVisit = $todayDate;
-    if ($lastVisitRaw !== '') {
-        $parsed = date_create_from_format('Y-m-d', $lastVisitRaw)
-               ?: date_create_from_format('m/d/Y', $lastVisitRaw)
-               ?: date_create_from_format('n/j/Y', $lastVisitRaw);
-        if ($parsed) {
-            $lastVisit = date_format($parsed, 'Y-m-d');
-        }
-    }
+    // Sanitise last_visit for Postgres date compatibility.
+    $lastVisit = normalize_last_visit($lastVisitRaw, $todayDate);
 
     // Duplicate check
-    $existingId = null;
-    mysqli_stmt_bind_param($dupStmt, 'ssssss', $name, $houseNo, $streetName, $city, $state, $zip);
-    mysqli_stmt_execute($dupStmt);
-    mysqli_stmt_bind_result($dupStmt, $existingId);
-    $isDuplicate = mysqli_stmt_fetch($dupStmt);
-    mysqli_stmt_free_result($dupStmt);
-
+    $dupStmt->execute([
+        ':name' => $name,
+        ':hno' => $houseNo,
+        ':stname' => $streetName,
+        ':city' => $city,
+        ':state' => $state,
+        ':zip' => $zip
+    ]);
+    $isDuplicate = $dupStmt->fetch(PDO::FETCH_ASSOC);
     if ($isDuplicate) {
         $skipped++;
         continue;
@@ -435,7 +432,7 @@ while (($row = fgetcsv($handle)) !== false) {
 }
 
 fclose($handle);
-mysqli_stmt_close($dupStmt);
+$dupStmt = null;
 
 if ($validateOnly) {
     http_response_code(200);
@@ -467,60 +464,56 @@ if (count($errors) > 0 && !$ignoreErrors) {
     exit;
 }
 
-$insertSql = 'INSERT INTO Addresses_AWS
-    (Name, Halaqa, H_No, Apt_No, St_Name, City, State, Zip,
-     Verified, Masjid, Comments, Last_Visit, Coordinates, Locality,
-     `Clear`, uploaded_by)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
-
-$insertStmt = mysqli_prepare($con, $insertSql);
-if (!$insertStmt) {
-    http_response_code(500);
-    echo json_encode(['success' => false, 'message' => 'Failed to prepare insert: ' . mysqli_error($con)]);
-    exit;
-}
-
-mysqli_begin_transaction($con);
+// Prepare insert statement (PDO)
+$insertSql = 'INSERT INTO "Addresses_AWS"
+    ("Name", "Halaqa", "H_No", "Apt_No", "St_Name", "City", "State", "Zip",
+     "Verified", "Masjid", "Comments", "Last_Visit", "Coordinates", "Locality",
+     "Status", "Clear", "uploaded_by")
+    VALUES (:name, :halaqa, :hno, :aptno, :stname, :city, :state, :zip, :verified, :masjid, :comments, :lastVisit, :coordinates, :locality, :status, :clear, :uploadedBy)';
+$pdo->beginTransaction();
 $insertFailed = false;
-
-foreach ($validRows as $rowData) {
-    mysqli_stmt_bind_param(
-        $insertStmt,
-        'ssssssssssssssii',
-        $rowData['name'],
-        $rowData['halaqa'],
-        $rowData['houseNo'],
-        $rowData['aptNo'],
-        $rowData['streetName'],
-        $rowData['city'],
-        $rowData['state'],
-        $rowData['zip'],
-        $rowData['verified'],
-        $rowData['masjid'],
-        $rowData['comments'],
-        $rowData['lastVisit'],
-        $rowData['coordinates'],
-        $rowData['locality'],
-        $defaultClear,
-        $uploadedBy
-    );
-
-    if (!mysqli_stmt_execute($insertStmt)) {
-        $insertFailed = true;
-        $errors[] = ['row' => -1, 'message' => 'DB insert failed: ' . mysqli_stmt_error($insertStmt)];
-        break;
+$inserted = 0;
+try {
+    $insertStmt = $pdo->prepare($insertSql);
+    foreach ($validRows as $rowData) {
+        $ok = $insertStmt->execute([
+            ':name' => $rowData['name'],
+            ':halaqa' => $rowData['halaqa'],
+            ':hno' => $rowData['houseNo'],
+            ':aptno' => $rowData['aptNo'],
+            ':stname' => $rowData['streetName'],
+            ':city' => $rowData['city'],
+            ':state' => $rowData['state'],
+            ':zip' => $rowData['zip'],
+            ':verified' => $rowData['verified'],
+            ':masjid' => $rowData['masjid'],
+            ':comments' => $rowData['comments'],
+            ':lastVisit' => $rowData['lastVisit'],
+            ':coordinates' => $rowData['coordinates'],
+            ':locality' => $rowData['locality'],
+            ':status' => $defaultStatus,
+            ':clear' => $defaultClear,
+            ':uploadedBy' => $uploadedBy
+        ]);
+        if (!$ok) {
+            $insertFailed = true;
+            $errors[] = ['row' => -1, 'message' => 'DB insert failed: ' . implode(' | ', $insertStmt->errorInfo())];
+            break;
+        }
+        $inserted++;
     }
-    $inserted++;
-}
-
-if ($insertFailed) {
-    mysqli_rollback($con);
+    if ($insertFailed) {
+        $pdo->rollBack();
+        $inserted = 0;
+    } else {
+        $pdo->commit();
+    }
+} catch (PDOException $e) {
+    $pdo->rollBack();
     $inserted = 0;
-} else {
-    mysqli_commit($con);
+    $insertFailed = true;
+    $errors[] = ['row' => -1, 'message' => 'DB insert failed: ' . $e->getMessage()];
 }
-
-mysqli_stmt_close($insertStmt);
 
 http_response_code(200);
 echo json_encode([

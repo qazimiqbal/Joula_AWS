@@ -1,4 +1,5 @@
 <?php
+include_once __DIR__ . '/cors.php';
 header('Content-Type: application/json');
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: POST, OPTIONS');
@@ -19,10 +20,7 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     respond(405, array('success' => false, 'message' => 'Method not allowed'));
 }
 
-include('db.php');
-if (!mysqli_select_db($con, $db)) {
-    respond(500, array('success' => false, 'message' => 'Failed to select database'));
-}
+require_once 'db.pgsql.php';
 
 function permission_to_level($permissionRaw) {
     $value = trim((string)$permissionRaw);
@@ -34,37 +32,35 @@ function permission_to_level($permissionRaw) {
     return 0;
 }
 
-function get_authenticated_user($con) {
+function get_authenticated_user($pdo) {
     $authHeader = isset($_SERVER['HTTP_AUTHORIZATION']) ? $_SERVER['HTTP_AUTHORIZATION'] : '';
     if (strpos($authHeader, 'Bearer ') !== 0) return null;
-
     $token = substr($authHeader, 7);
-    $stmt = mysqli_prepare($con,
-        "SELECT id, org_id, org_role, Permissions
-         FROM Login_user_AWS
-         WHERE auth_token = ? AND status = 'true' LIMIT 1");
-
-    if (!$stmt) return null;
-
-    mysqli_stmt_bind_param($stmt, 's', $token);
-    mysqli_stmt_execute($stmt);
-    $id = $orgId = null;
-    $orgRole = $permissionsRaw = null;
-    mysqli_stmt_bind_result($stmt, $id, $orgId, $orgRole, $permissionsRaw);
-    $found = mysqli_stmt_fetch($stmt);
-    mysqli_stmt_close($stmt);
-
-    if (!$found || !$id) return null;
-
+    $sql = 'SELECT id, org_id, org_role, permissions FROM "Login_user_AWS" WHERE auth_token = :token AND status = :status LIMIT 1';
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute([':token' => $token, ':status' => 'true']);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$row) return null;
     return array(
-        'id' => intval($id),
-        'orgId' => intval($orgId),
-        'orgRole' => $orgRole,
-        'permissionLevel' => permission_to_level($permissionsRaw),
+        'id' => intval($row['id']),
+        'orgId' => intval($row['org_id']),
+        'orgRole' => $row['org_role'],
+        'permissionLevel' => permission_to_level($row['permissions']),
     );
 }
 
-$me = get_authenticated_user($con);
+function has_column_pg($pdo, $tableName, $columnName) {
+    $sql = 'SELECT 1 FROM information_schema.columns WHERE table_schema = :schema AND lower(table_name) = lower(:tableName) AND lower(column_name) = lower(:columnName) LIMIT 1';
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute([
+        ':schema' => 'public',
+        ':tableName' => $tableName,
+        ':columnName' => $columnName,
+    ]);
+    return (bool)$stmt->fetchColumn();
+}
+
+$me = get_authenticated_user($pdo);
 if (!$me) {
     respond(401, array('success' => false, 'message' => 'Unauthorized'));
 }
@@ -96,33 +92,25 @@ if ($orgRole !== 'editor' && $orgRole !== 'viewer') {
     respond(400, array('success' => false, 'message' => 'orgRole must be editor or viewer'));
 }
 
-$seatStmt = mysqli_prepare($con,
-    "SELECT max_editors, max_viewers FROM organizations WHERE id = ? LIMIT 1");
-if (!$seatStmt) {
-    respond(500, array('success' => false, 'message' => 'Failed to load organization limits'));
-}
-mysqli_stmt_bind_param($seatStmt, 'i', $me['orgId']);
-mysqli_stmt_execute($seatStmt);
-$maxEditors = $maxViewers = null;
-mysqli_stmt_bind_result($seatStmt, $maxEditors, $maxViewers);
-$foundOrg = mysqli_stmt_fetch($seatStmt);
-mysqli_stmt_close($seatStmt);
 
-if (!$foundOrg) {
+$sqlSeat = 'SELECT "max_editors", "max_viewers" FROM "organizations" WHERE "id" = :id LIMIT 1';
+$stmtSeat = $pdo->prepare($sqlSeat);
+$stmtSeat->execute([':id' => $me['orgId']]);
+$rowSeat = $stmtSeat->fetch(PDO::FETCH_ASSOC);
+if (!$rowSeat) {
     respond(404, array('success' => false, 'message' => 'Organization not found'));
 }
+$maxEditors = intval($rowSeat['max_editors']);
+$maxViewers = intval($rowSeat['max_viewers']);
+if ($maxEditors <= 0) $maxEditors = 1;
+if ($maxViewers <= 0) $maxViewers = 3;
 
-$countStmt = mysqli_prepare($con,
-    "SELECT COUNT(*) FROM Login_user_AWS WHERE org_id = ? AND org_role = ?");
-if (!$countStmt) {
-    respond(500, array('success' => false, 'message' => 'Failed to count current team members'));
-}
-mysqli_stmt_bind_param($countStmt, 'is', $me['orgId'], $orgRole);
-mysqli_stmt_execute($countStmt);
-$currentCount = 0;
-mysqli_stmt_bind_result($countStmt, $currentCount);
-mysqli_stmt_fetch($countStmt);
-mysqli_stmt_close($countStmt);
+
+$sqlCount = 'SELECT COUNT(*) AS cnt FROM "Login_user_AWS" WHERE "org_id" = :orgId AND "org_role" = :orgRole';
+$stmtCount = $pdo->prepare($sqlCount);
+$stmtCount->execute([':orgId' => $me['orgId'], ':orgRole' => $orgRole]);
+$rowCount = $stmtCount->fetch(PDO::FETCH_ASSOC);
+$currentCount = $rowCount ? intval($rowCount['cnt']) : 0;
 
 $maxEditors = intval($maxEditors);
 $maxViewers = intval($maxViewers);
@@ -134,20 +122,13 @@ if ($roleLimit > 0 && intval($currentCount) >= $roleLimit) {
     respond(422, array('success' => false, 'message' => "Seat limit reached for {$orgRole} users"));
 }
 
-$dupStmt = mysqli_prepare($con,
-    "SELECT
-        MAX(CASE WHEN username = ? THEN 1 ELSE 0 END) AS username_exists,
-        MAX(CASE WHEN email = ? THEN 1 ELSE 0 END) AS email_exists
-     FROM Login_user_AWS");
-if (!$dupStmt) {
-    respond(500, array('success' => false, 'message' => 'Failed to check duplicates'));
-}
-mysqli_stmt_bind_param($dupStmt, 'ss', $username, $email);
-mysqli_stmt_execute($dupStmt);
-$usernameExists = $emailExists = 0;
-mysqli_stmt_bind_result($dupStmt, $usernameExists, $emailExists);
-mysqli_stmt_fetch($dupStmt);
-mysqli_stmt_close($dupStmt);
+
+$sqlDup = 'SELECT MAX(CASE WHEN "username" = :username THEN 1 ELSE 0 END) AS username_exists, MAX(CASE WHEN "email" = :email THEN 1 ELSE 0 END) AS email_exists FROM "Login_user_AWS"';
+$stmtDup = $pdo->prepare($sqlDup);
+$stmtDup->execute([':username' => $username, ':email' => $email]);
+$rowDup = $stmtDup->fetch(PDO::FETCH_ASSOC);
+$usernameExists = $rowDup ? intval($rowDup['username_exists']) : 0;
+$emailExists = $rowDup ? intval($rowDup['email_exists']) : 0;
 
 if (intval($usernameExists) === 1 || intval($emailExists) === 1) {
     $parts = array();
@@ -158,108 +139,46 @@ if (intval($usernameExists) === 1 || intval($emailExists) === 1) {
 
 $permission = ($orgRole === 'editor') ? '2' : '1';
 
-// Dynamically build INSERT to handle optional columns (mirrors register.php pattern)
-$hasPassChange = (function() use ($con) {
-    $result = mysqli_query($con, "SHOW COLUMNS FROM Login_user_AWS LIKE 'Pass_change'");
-    if ($result) {
-        $row = mysqli_fetch_row($result);
-        mysqli_free_result($result);
-        return (bool)$row;
-    }
-    return false;
-})();
 
-$hasPhone = (function() use ($con) {
-    $result = mysqli_query($con, "SHOW COLUMNS FROM Login_user_AWS LIKE 'phone'");
-    if ($result) {
-        $row = mysqli_fetch_row($result);
-        mysqli_free_result($result);
-        return (bool)$row;
-    }
-    return false;
-})();
-
-$hasGoogleOnly = (function() use ($con) {
-    $result = mysqli_query($con, "SHOW COLUMNS FROM Login_user_AWS LIKE 'google_only'");
-    if ($result) {
-        $row = mysqli_fetch_row($result);
-        mysqli_free_result($result);
-        if ($row) return true;
-    }
-    mysqli_query($con, "ALTER TABLE Login_user_AWS ADD COLUMN google_only TINYINT(1) NOT NULL DEFAULT 0");
-    $result2 = mysqli_query($con, "SHOW COLUMNS FROM Login_user_AWS LIKE 'google_only'");
-    if ($result2) {
-        $row2 = mysqli_fetch_row($result2);
-        mysqli_free_result($result2);
-        return (bool)$row2;
-    }
-    return false;
-})();
+$hasPassChange = has_column_pg($pdo, 'Login_user_AWS', 'Pass_change');
+$hasPhone = has_column_pg($pdo, 'Login_user_AWS', 'phone');
+$hasGoogleOnly = has_column_pg($pdo, 'Login_user_AWS', 'google_only');
 
 $generatedPassword = bin2hex(random_bytes(24));
 
-$insertColumns = array('username', 'password', 'email');
-$insertValues  = array('?', 'MD5(?)', '?');
-$bindTypes     = 'sss';
-$bindValues    = array($username, $generatedPassword, $email);
+
+$insertColumns = ['"username"', '"password"', '"email"', 'permissions', '"status"', '"org_role"', '"org_id"'];
+$insertValues = [':username', 'MD5(:password)', ':email', ':permission', ':status', ':orgRole', ':orgId'];
+$insertParams = [
+    ':username' => $username,
+    ':password' => $generatedPassword,
+    ':email' => $email,
+    ':permission' => $permission,
+    ':status' => 'true',
+    ':orgRole' => $orgRole,
+    ':orgId' => $me['orgId'],
+];
 
 if ($hasPhone) {
-    $insertColumns[] = 'phone';
-    $insertValues[]  = '?';
-    $bindTypes       .= 's';
-    $bindValues[]    = $phone;
+    $insertColumns[] = '"phone"';
+    $insertValues[] = ':phone';
+    $insertParams[':phone'] = $phone;
 }
-
-$insertColumns[] = 'Permissions';
-$insertValues[]  = '?';
-$bindTypes       .= 's';
-$bindValues[]    = $permission;
-
 if ($hasPassChange) {
-    $insertColumns[] = 'Pass_change';
-    $insertValues[]  = "'No'";
+    $insertColumns[] = '"Pass_change"';
+    $insertValues[] = ':passChange';
+    $insertParams[':passChange'] = 'No';
 }
-
-$insertColumns[] = 'status';
-$insertValues[]  = "'true'";
-
-$insertColumns[] = 'org_role';
-$insertValues[]  = '?';
-$bindTypes       .= 's';
-$bindValues[]    = $orgRole;
-
-$insertColumns[] = 'org_id';
-$insertValues[]  = '?';
-$bindTypes       .= 'i';
-$bindValues[]    = $me['orgId'];
-
 if ($hasGoogleOnly) {
-    $insertColumns[] = 'google_only';
-    $insertValues[]  = '1';
+    $insertColumns[] = '"google_only"';
+    $insertValues[] = ':googleOnly';
+    $insertParams[':googleOnly'] = 1;
 }
 
-$sqlInsert = "INSERT INTO Login_user_AWS (" . implode(', ', $insertColumns) . ") VALUES (" . implode(', ', $insertValues) . ")";
-$stmtInsert = mysqli_prepare($con, $sqlInsert);
-
-if (!$stmtInsert) {
-    respond(500, array('success' => false, 'message' => 'Failed to prepare user creation query', 'error' => mysqli_error($con), 'sql' => $sqlInsert));
-}
-
-$bindParams = array($bindTypes);
-foreach ($bindValues as $k => $v) {
-    $bindParams[] = &$bindValues[$k];
-}
-call_user_func_array(array($stmtInsert, 'bind_param'), $bindParams);
-
-if (!mysqli_stmt_execute($stmtInsert)) {
-    $error = mysqli_stmt_error($stmtInsert);
-    mysqli_stmt_close($stmtInsert);
-    respond(500, array('success' => false, 'message' => 'Failed to create team user', 'error' => $error));
-}
-
-$newUserId = mysqli_insert_id($con);
-mysqli_stmt_close($stmtInsert);
-
+$sqlInsert = 'INSERT INTO "Login_user_AWS" (' . implode(', ', $insertColumns) . ') VALUES (' . implode(', ', $insertValues) . ') RETURNING "id"';
+$stmtInsert = $pdo->prepare($sqlInsert);
+$stmtInsert->execute($insertParams);
+$newUserId = $stmtInsert->fetchColumn();
 respond(200, array(
     'success' => true,
     'message' => 'Team member created successfully. They must sign in with Google using this email.',

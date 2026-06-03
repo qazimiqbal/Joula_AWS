@@ -1,17 +1,21 @@
+
 <?php
-$con = mysqli_connect("p3plzcpnl491154.prod.phx3.secureserver.net", "joula", "Joula@955");
-if (mysqli_connect_errno()) {
-    http_response_code(500);
-    echo json_encode(['success' => false, 'message' => 'Database connection failed: ' . mysqli_connect_error()]);
-    exit;
-}
-$db = "Joula_AWS";
-if (!mysqli_select_db($con, $db)) {
-    http_response_code(500);
-    echo json_encode([
-        'success' => false,
-        'message' => "Failed to select database '$db': " . mysqli_error($con)
+// Use environment variables for DB connection, fallback to local defaults
+
+$db_host = getenv('DB_HOST') ?: 'localhost';
+$db_name = getenv('DB_NAME') ?: 'myjouladb';
+$db_user = getenv('DB_USER') ?: 'joulauser';
+$db_pass = getenv('DB_PASS') ?: 'JoulaSecure2026!';
+
+try {
+    $dsn = "pgsql:host=$db_host;dbname=$db_name";
+    $con = new PDO($dsn, $db_user, $db_pass, [
+        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
     ]);
+} catch (PDOException $e) {
+    http_response_code(500);
+    echo json_encode(['success' => false, 'message' => 'Database connection failed: ' . $e->getMessage()]);
     exit;
 }
 ?>

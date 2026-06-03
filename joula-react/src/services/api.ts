@@ -1,7 +1,7 @@
 import axios, { AxiosInstance, AxiosError } from 'axios'
 import { ApiResponse, User, Masjid, AddressRecord, LoginRequest, AuthResponse, PrayerTime, RegisterRequest, PendingUser, CreateAddressRequest, MissingCoordinatesRecord, PendingGeocodeRecord, SubscriptionInfo, OrgUsersResponse, ImportAddressesResponse, CreateMasjidRequest, PendingMasjidRecord, CreateTeamUserRequest } from '@/types'
 
-const API_BASE_URL = import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? '' : '/Joula')
+const API_BASE_URL = import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? 'http://localhost:8000' : '/Joula')
 
 interface LegacyAddress {
   ID: string
@@ -143,13 +143,10 @@ const mapLegacyMasjid = (item: LegacyMasjid): Masjid => {
 class ApiService {
   // Google Geocoding via backend proxy
   async googleGeocodeAddress(address: string): Promise<{ lat: number; lng: number; raw?: any }> {
-    const response = await this.api.post<{ success: boolean; lat?: number; lng?: number; raw?: any; message?: string }>(
-      '/api/google_geocode.php',
-      { address }
+    const response = await this.api.get<{ success: boolean; lat?: number; lng?: number; raw?: any; message?: string }>(
+      '/geocode.php',
+      { params: { address } }
     )
-    // Debug: log the full response
-    // eslint-disable-next-line no-console
-    console.log('Google Geocode API response:', response);
     if (response.data.success && typeof response.data.lat === 'number' && typeof response.data.lng === 'number') {
       return { lat: response.data.lat, lng: response.data.lng, raw: response.data.raw }
     }
@@ -157,14 +154,14 @@ class ApiService {
   }
 
   async deleteMasjid(id: number): Promise<void> {
-    const response = await this.api.post<{ success: boolean; message?: string }>('/api/delete_masjid.php', { id })
+    const response = await this.api.post<{ success: boolean; message?: string }>('/delete_masjid.php', { id })
     if (!response.data.success) {
       throw new Error(response.data.message || 'Failed to delete masjid')
     }
   }
 
   async deleteAddress(id: number): Promise<void> {
-    const response = await this.api.post<{ success: boolean; message?: string }>('/api/delete_address.php', { id })
+    const response = await this.api.post<{ success: boolean; message?: string }>('/delete_address.php', { id })
     if (!response.data.success) {
       throw new Error(response.data.message || 'Failed to delete address')
     }
@@ -183,7 +180,7 @@ class ApiService {
       coordinates?: string
     }
   ): Promise<void> {
-    const response = await this.api.post<{ success: boolean; message?: string }>('/api/masjid_review.php', {
+    const response = await this.api.post<{ success: boolean; message?: string }>('/masjid_review.php', {
       action: 'update',
       id,
       ...data,
@@ -194,7 +191,7 @@ class ApiService {
   }
 
   async updateMyData(type: 'masjid' | 'address', id: number, fields: Record<string, string>): Promise<void> {
-    const response = await this.api.post<{ success: boolean; message?: string }>('/api/my_data_update.php', {
+    const response = await this.api.post<{ success: boolean; message?: string }>('/my_data_update.php', {
       type,
       id,
       ...fields,
@@ -228,7 +225,7 @@ class ApiService {
       (error: AxiosError) => {
         if (error.response?.status === 401) {
           const requestUrl = error.config?.url || ''
-          const isLoginRequest = requestUrl.includes('/api/login.php') || requestUrl.includes('/api/google_login.php')
+          const isLoginRequest = requestUrl.includes('/login.php') || requestUrl.includes('/google_login.php')
           const message = String((error.response.data as { message?: string } | undefined)?.message || '').toLowerCase()
           const looksLikeTokenFailure =
             message.includes('invalid token') ||
@@ -250,15 +247,17 @@ class ApiService {
 
   // Auth endpoints
   async login(credentials: LoginRequest): Promise<AuthResponse> {
-    const response = await this.api.post<ApiResponse<AuthResponse>>('/api/login.php', credentials)
-    if (response.data.data) {
+    const response = await this.api.post<ApiResponse<AuthResponse>>('/login.php', credentials)
+    console.log('[apiService.login] Full Axios response:', response)
+    console.log('[apiService.login] response.data:', response.data)
+    if (response.data && response.data.data) {
       return response.data.data
     }
     throw new Error(response.data.message || 'Login failed')
   }
 
   async googleLogin(idToken: string): Promise<AuthResponse> {
-    const response = await this.api.post<ApiResponse<AuthResponse>>('/api/google_login.php', { idToken })
+    const response = await this.api.post<ApiResponse<AuthResponse>>('/google_login.php', { idToken })
     if (response.data.data) {
       return response.data.data
     }
@@ -270,7 +269,7 @@ class ApiService {
   }
 
   async register(userData: RegisterRequest): Promise<void> {
-    const response = await this.api.post<{ success: boolean; message?: string }>('/api/register.php', userData)
+    const response = await this.api.post<{ success: boolean; message?: string }>('/register.php', userData)
     if (!response.data.success) {
       throw new Error(response.data.message || 'Registration failed')
     }
@@ -278,7 +277,7 @@ class ApiService {
 
   // User endpoints
   async getUser(id: number): Promise<User> {
-    const response = await this.api.get<ApiResponse<User>>('/api/user.php', { params: { id } })
+    const response = await this.api.get<ApiResponse<User>>('/user.php', { params: { id } })
     if (response.data.data) {
       return response.data.data
     }
@@ -286,7 +285,7 @@ class ApiService {
   }
 
   async updateUser(id: number, userData: Partial<User> & { password?: string }): Promise<User> {
-    const response = await this.api.post<ApiResponse<User>>('/api/user.php', {
+    const response = await this.api.post<ApiResponse<User>>('/user.php', {
       id,
       ...userData,
     })
@@ -296,19 +295,18 @@ class ApiService {
     throw new Error(response.data.message || 'Failed to update user')
   }
 
-  async getPendingUsers(requesterId: number): Promise<PendingUser[]> {
-    const response = await this.api.get<{ success: boolean; data: PendingUser[]; message?: string }>('/api/pending_users.php', {
-      params: { requesterId },
-    })
+  async getPendingUsers(): Promise<PendingUser[]> {
+    // Always send Authorization header (handled by interceptor)
+    const response = await this.api.get<{ success: boolean; data: PendingUser[]; message?: string }>('/pending_users.php')
     if (response.data.data) {
       return response.data.data
     }
     throw new Error(response.data.message || 'Failed to fetch pending users')
   }
 
-  async reviewPendingUser(requesterId: number, userId: number, action: 'approve' | 'disapprove'): Promise<void> {
-    const response = await this.api.post<{ success: boolean; message?: string }>('/api/pending_users.php', {
-      requesterId,
+  async reviewPendingUser(userId: number, action: 'approve' | 'disapprove'): Promise<void> {
+    // Always send Authorization header (handled by interceptor)
+    const response = await this.api.post<{ success: boolean; message?: string }>('/pending_users.php', {
       userId,
       action,
     })
@@ -319,7 +317,7 @@ class ApiService {
 
   // Masjid endpoints
   async getMasjids(params?: { state?: string; locality?: string; search?: string; limit?: number; page?: number; createdBy?: number; orgScoped?: boolean; includeOwnPending?: boolean; mine?: boolean }): Promise<Masjid[]> {
-    const response = await this.api.get<{ success: boolean; data: LegacyMasjid[] }>('/api/masjids.php', {
+    const response = await this.api.get<{ success: boolean; data: LegacyMasjid[] }>('/masjids.php', {
       params: {
         state: params?.state,
         locality: params?.locality,
@@ -413,7 +411,7 @@ class ApiService {
 
   // Localities for area selection
   async getLocalities(state: string): Promise<string[]> {
-    const response = await this.api.get<{ success: boolean; data: string[] }>('/api/localities.php', {
+    const response = await this.api.get<{ success: boolean; data: string[] }>('/localities.php', {
       params: { state },
     })
     return response.data.data || []
@@ -428,7 +426,7 @@ class ApiService {
     mine?: boolean
     listAll?: boolean
   }): Promise<AddressRecord[]> {
-    const response = await this.api.get<{ success: boolean; data: LegacyAddress[] }>('/api/addresses.php', {
+    const response = await this.api.get<{ success: boolean; data: LegacyAddress[] }>('/addresses.php', {
       params: {
         state: params?.state,
         locality: params?.locality,
@@ -475,7 +473,7 @@ class ApiService {
 
   // Visit / Comments
   async getVisitData(id: number): Promise<{ comments: string; ethinicity: string; potential: string }> {
-    const response = await this.api.get<{ success: boolean; data: { comments: string; ethinicity: string; potential: string } }>('/api/visit.php', { params: { id } })
+    const response = await this.api.get<{ success: boolean; data: { comments: string; ethinicity: string; potential: string } }>('/visit.php', { params: { id } })
     if (response.data.data) return response.data.data
     throw new Error('Failed to load visit data')
   }
@@ -484,12 +482,12 @@ class ApiService {
     id: number,
     data: { today: string; actionTaken: string; comments: string; ethinicity: string; potential: string }
   ): Promise<void> {
-    const response = await this.api.post<{ success: boolean; message?: string }>('/api/visit.php', { id, ...data })
+    const response = await this.api.post<{ success: boolean; message?: string }>('/visit.php', { id, ...data })
     if (!response.data.success) throw new Error(response.data.message || 'Update failed')
   }
 
   async createAddress(data: CreateAddressRequest): Promise<void> {
-    const response = await this.api.post<{ success: boolean; message?: string }>('/api/address_create.php', data)
+    const response = await this.api.post<{ success: boolean; message?: string }>('/address_create.php', data)
     if (!response.data.success) {
       throw new Error(response.data.message || 'Failed to create address')
     }
@@ -497,7 +495,7 @@ class ApiService {
 
   async createMasjid(data: CreateMasjidRequest): Promise<void> {
     try {
-      const response = await this.api.post<{ success: boolean; message?: string; error?: string; debug?: { values?: unknown; query?: string } }>('/api/masjid_create.php', data)
+      const response = await this.api.post<{ success: boolean; message?: string; error?: string; debug?: { values?: unknown; query?: string } }>('/masjid_create.php', data)
       if (!response.data.success) {
         const detail = response.data.error ? `: ${response.data.error}` : ''
         throw new Error((response.data.message || 'Failed to create masjid') + detail)
@@ -528,27 +526,60 @@ class ApiService {
     if (options?.ignoreErrors) {
       form.append('ignoreErrors', '1')
     }
-    const response = await this.api.post<ImportAddressesResponse>('/api/address_import.php', form, {
+    const response = await this.api.post<ImportAddressesResponse>('/address_import.php', form, {
       headers: { 'Content-Type': 'multipart/form-data' },
     })
     return response.data
   }
 
   async getMissingCoordinates(): Promise<MissingCoordinatesRecord[]> {
-    const response = await this.api.get<{ success: boolean; data: MissingCoordinatesRecord[] }>('/api/missing_coordinates.php')
+    const response = await this.api.get<{ success: boolean; data: MissingCoordinatesRecord[] }>('/missing_coordinates.php')
     return response.data.data || []
   }
 
   async saveCoordinates(id: number, latitude: number, longitude: number): Promise<void> {
-    const response = await this.api.post<{ success: boolean; message?: string }>('/api/missing_coordinates.php', { id, latitude, longitude })
+    const response = await this.api.post<{ success: boolean; message?: string }>('/missing_coordinates.php', { id, latitude, longitude })
     if (!response.data.success) {
       throw new Error(response.data.message || 'Failed to save coordinates')
     }
   }
 
+  async updateMissingCoordinatesAddress(
+    id: number,
+    payload: {
+      name: string
+      houseNo: string
+      aptNo?: string
+      streetName: string
+      city: string
+      state: string
+      zip: string
+      locality?: string
+    }
+  ): Promise<void> {
+    const response = await this.api.post<{ success: boolean; message?: string }>('/missing_coordinates.php', {
+      action: 'update_address',
+      id,
+      ...payload,
+    })
+    if (!response.data.success) {
+      throw new Error(response.data.message || 'Failed to update address')
+    }
+  }
+
+  async deleteMissingCoordinatesAddress(id: number): Promise<void> {
+    const response = await this.api.post<{ success: boolean; message?: string }>('/missing_coordinates.php', {
+      action: 'delete_address',
+      id,
+    })
+    if (!response.data.success) {
+      throw new Error(response.data.message || 'Failed to delete address')
+    }
+  }
+
   async getGeocodeReviewList(createdBy?: number): Promise<PendingGeocodeRecord[]> {
     try {
-      const response = await this.api.get<{ success: boolean; data: PendingGeocodeRecord[]; message?: string }>('/api/geocode_review.php', {
+      const response = await this.api.get<{ success: boolean; data: PendingGeocodeRecord[]; message?: string }>('/geocode_review.php', {
         params: createdBy ? { createdBy } : undefined,
       })
       if (!response.data.success) {
@@ -564,14 +595,14 @@ class ApiService {
   }
 
   async approveGeocodedAddress(id: number): Promise<void> {
-    const response = await this.api.post<{ success: boolean; message?: string }>('/api/geocode_review.php', { id })
+    const response = await this.api.post<{ success: boolean; message?: string }>('/geocode_review.php', { id })
     if (!response.data.success) {
       throw new Error(response.data.message || 'Failed to approve address')
     }
   }
 
   async getAddressReviewList(createdBy?: number): Promise<PendingGeocodeRecord[]> {
-    const response = await this.api.get<{ success: boolean; data: PendingGeocodeRecord[]; message?: string }>('/api/address_review.php', {
+    const response = await this.api.get<{ success: boolean; data: PendingGeocodeRecord[]; message?: string }>('/address_review.php', {
       params: createdBy ? { createdBy } : undefined,
     })
     if (!response.data.success) {
@@ -581,7 +612,7 @@ class ApiService {
   }
 
   async getMyPendingAddresses(): Promise<PendingGeocodeRecord[]> {
-    const response = await this.api.get<{ success: boolean; data: PendingGeocodeRecord[]; message?: string }>('/api/my_pending_addresses.php')
+    const response = await this.api.get<{ success: boolean; data: PendingGeocodeRecord[]; message?: string }>('/my_pending_addresses.php')
     if (!response.data.success) {
       throw new Error(response.data.message || 'Failed to load pending addresses')
     }
@@ -589,14 +620,14 @@ class ApiService {
   }
 
   async approveAddress(id: number): Promise<void> {
-    const response = await this.api.post<{ success: boolean; message?: string }>('/api/address_review.php', { id })
+    const response = await this.api.post<{ success: boolean; message?: string }>('/address_review.php', { id })
     if (!response.data.success) {
       throw new Error(response.data.message || 'Failed to approve address')
     }
   }
 
   async approveAllAddresses(): Promise<number> {
-    const response = await this.api.post<{ success: boolean; message?: string; approvedCount?: number }>('/api/address_review.php', {
+    const response = await this.api.post<{ success: boolean; message?: string; approvedCount?: number }>('/address_review.php', {
       action: 'approve_all',
     })
     if (!response.data.success) {
@@ -623,7 +654,7 @@ class ApiService {
       coordinates?: string
     }
   ): Promise<void> {
-    const response = await this.api.post<{ success: boolean; message?: string }>('/api/address_review.php', {
+    const response = await this.api.post<{ success: boolean; message?: string }>('/address_review.php', {
       action: 'update',
       id,
       ...data,
@@ -634,7 +665,7 @@ class ApiService {
   }
 
   async getMasjidReviewList(createdBy?: number): Promise<PendingMasjidRecord[]> {
-    const response = await this.api.get<{ success: boolean; data: PendingMasjidRecord[]; message?: string }>('/api/masjid_review.php', {
+    const response = await this.api.get<{ success: boolean; data: PendingMasjidRecord[]; message?: string }>('/masjid_review.php', {
       params: createdBy ? { createdBy } : undefined,
     })
     if (!response.data.success) {
@@ -644,7 +675,7 @@ class ApiService {
   }
 
   async getMyPendingMasjids(): Promise<PendingMasjidRecord[]> {
-    const response = await this.api.get<{ success: boolean; data: PendingMasjidRecord[]; message?: string }>('/api/my_pending_masjids.php')
+    const response = await this.api.get<{ success: boolean; data: PendingMasjidRecord[]; message?: string }>('/my_pending_masjids.php')
     if (!response.data.success) {
       throw new Error(response.data.message || 'Failed to load pending masjids')
     }
@@ -652,14 +683,14 @@ class ApiService {
   }
 
   async approveMasjid(id: number): Promise<void> {
-    const response = await this.api.post<{ success: boolean; message?: string }>('/api/masjid_review.php', { id })
+    const response = await this.api.post<{ success: boolean; message?: string }>('/masjid_review.php', { id })
     if (!response.data.success) {
       throw new Error(response.data.message || 'Failed to approve masjid')
     }
   }
 
   async adminGetUsers(): Promise<any[]> {
-    const response = await this.api.get<{ success: boolean; data: any[]; message?: string }>('/api/admin_users.php', {
+    const response = await this.api.get<{ success: boolean; data: any[]; message?: string }>('/admin_users.php', {
       params: { action: 'list' },
     })
     if (response.data.success) return response.data.data || []
@@ -667,7 +698,7 @@ class ApiService {
   }
 
   async adminGetUserMasjids(userId: number): Promise<any[]> {
-    const response = await this.api.get<{ success: boolean; data: any[]; message?: string }>('/api/admin_users.php', {
+    const response = await this.api.get<{ success: boolean; data: any[]; message?: string }>('/admin_users.php', {
       params: { action: 'masjids', userId },
     })
     if (response.data.success) return response.data.data || []
@@ -675,7 +706,7 @@ class ApiService {
   }
 
   async adminGetUserTeam(userId: number): Promise<any[]> {
-    const response = await this.api.get<{ success: boolean; data: any[]; message?: string }>('/api/admin_users.php', {
+    const response = await this.api.get<{ success: boolean; data: any[]; message?: string }>('/admin_users.php', {
       params: { action: 'team', userId },
     })
     if (response.data.success) return response.data.data || []
@@ -683,13 +714,25 @@ class ApiService {
   }
 
   async adminUpdateUser(userId: number, data: { email: string; phone: string; password?: string }): Promise<void> {
-    const response = await this.api.post<{ success: boolean; message?: string }>('/api/admin_users.php', {
+    const response = await this.api.post<{ success: boolean; message?: string }>('/admin_users.php', {
       action: 'update_user',
       userId,
       ...data,
     })
     if (!response.data.success) {
       throw new Error(response.data.message || 'Failed to update user')
+    }
+  }
+
+  async adminUpdateOrgLimits(orgId: number, data: { maxEditors: number; maxViewers: number; freeAccount: boolean }): Promise<void> {
+    const response = await this.api.post<{ success: boolean; message?: string }>('/admin_users.php?action=update_org_limits', {
+      orgId,
+      maxEditors: data.maxEditors,
+      maxViewers: data.maxViewers,
+      freeAccount: data.freeAccount,
+    })
+    if (!response.data.success) {
+      throw new Error(response.data.message || 'Failed to update organization limits')
     }
   }
 
@@ -708,7 +751,7 @@ class ApiService {
         state?: string
         zip?: string
         message?: string
-      }>('/api/reverse_geocode.php', {
+      }>('/reverse_geocode.php', {
         params: { lat, lng },
       })
 
@@ -781,7 +824,7 @@ class ApiService {
   // ---------------------------------------------------------------
   async getSubscription(): Promise<SubscriptionInfo | null> {
     try {
-      const response = await this.api.get('/api/subscription.php')
+      const response = await this.api.get('/subscription.php')
       return response.data?.data ?? null
     } catch {
       return null
@@ -789,12 +832,12 @@ class ApiService {
   }
 
   async createCheckoutSession(): Promise<string | null> {
-    const response = await this.api.post('/api/subscription.php', { action: 'create_checkout' })
+    const response = await this.api.post('/subscription.php', { action: 'create_checkout' })
     return response.data?.checkoutUrl ?? null
   }
 
   async createBillingPortalSession(): Promise<string | null> {
-    const response = await this.api.post('/api/subscription.php', { action: 'billing_portal' })
+    const response = await this.api.post('/subscription.php', { action: 'billing_portal' })
     return response.data?.portalUrl ?? null
   }
 
@@ -803,7 +846,7 @@ class ApiService {
   // ---------------------------------------------------------------
   async getOrgUsers(): Promise<OrgUsersResponse | null> {
     try {
-      const response = await this.api.get('/api/org_users.php')
+      const response = await this.api.get('/org_users.php')
       return response.data?.data ?? null
     } catch {
       return null
@@ -811,19 +854,19 @@ class ApiService {
   }
 
   async addOrgUser(userId: number, orgRole: 'editor' | 'viewer'): Promise<void> {
-    await this.api.post('/api/org_users.php', { action: 'add_user', user_id: userId, org_role: orgRole })
+    await this.api.post('/org_users.php', { action: 'add_user', user_id: userId, org_role: orgRole })
   }
 
   async setOrgUserRole(userId: number, orgRole: 'editor' | 'viewer'): Promise<void> {
-    await this.api.post('/api/org_users.php', { action: 'set_role', user_id: userId, org_role: orgRole })
+    await this.api.post('/org_users.php', { action: 'set_role', user_id: userId, org_role: orgRole })
   }
 
   async removeOrgUser(userId: number): Promise<void> {
-    await this.api.post('/api/org_users.php', { action: 'remove_user', user_id: userId })
+    await this.api.post('/org_users.php', { action: 'remove_user', user_id: userId })
   }
 
   async createTeamUser(data: CreateTeamUserRequest): Promise<void> {
-    const response = await this.api.post<{ success: boolean; message?: string }>('/api/create_team_user.php', {
+    const response = await this.api.post<{ success: boolean; message?: string }>('/create_team_user.php', {
       username: data.username,
       email: data.email,
       phone: data.phone,
@@ -838,7 +881,7 @@ class ApiService {
   // Free User Creation (super admin only)
   // ---------------------------------------------------------------
   async createFreeUser(data: { username: string; email: string; password: string; phone?: string }): Promise<void> {
-    const response = await this.api.post<{ success: boolean; message?: string }>('/api/create_free_user.php', data)
+    const response = await this.api.post<{ success: boolean; message?: string }>('/create_free_user.php', data)
     if (!response.data.success) {
       throw new Error(response.data.message || 'Failed to create free user')
     }

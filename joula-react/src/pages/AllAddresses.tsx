@@ -5,9 +5,11 @@ import EditIcon from '@mui/icons-material/Edit';
 import { useNavigate } from 'react-router-dom';
 import { AddressRecord } from '@/types';
 import apiClient from '@/services/api';
+import { useAuth } from '@/context/AuthContext';
 
 const AllAddresses: React.FC = () => {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [addresses, setAddresses] = useState<AddressRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -17,7 +19,16 @@ const AllAddresses: React.FC = () => {
       try {
         setLoading(true);
         setError(null);
-        const data = await apiClient.getAddresses({ listAll: true });
+        // Use mine: true for org_admin or admin, listAll: true for super admin
+        let params: any = {};
+        if (user && (user.orgRole === 'org_admin' || user.orgRole === 'admin')) {
+          params.mine = true;
+        } else if (user && user.permissionLevel >= 4) {
+          params.listAll = true;
+        } else {
+          params.mine = true;
+        }
+        const data = await apiClient.getAddresses(params);
         setAddresses(data);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load addresses');
@@ -27,7 +38,8 @@ const AllAddresses: React.FC = () => {
     };
 
     fetchAddresses();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]);
 
   const handleEdit = () => {
     navigate('/area-selection');

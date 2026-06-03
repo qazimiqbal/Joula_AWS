@@ -34,7 +34,7 @@ const PendingUsers: React.FC = () => {
     setLoading(true)
     setError('')
     try {
-      const data = await apiService.getPendingUsers(user.id)
+      const data = await apiService.getPendingUsers()
       setPendingUsers(data)
       setPage(0)
     } catch (err: unknown) {
@@ -54,7 +54,7 @@ const PendingUsers: React.FC = () => {
     setError('')
     setSuccess('')
     try {
-      await apiService.reviewPendingUser(user.id, userId, action)
+      await apiService.reviewPendingUser(userId, action)
       setSuccess(`User ${action === 'approve' ? 'approved' : 'disapproved'} successfully`)
       setPendingUsers((prev) => prev.filter((u) => u.id !== userId))
     } catch (err: unknown) {

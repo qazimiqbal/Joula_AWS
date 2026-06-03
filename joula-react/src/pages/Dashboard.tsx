@@ -8,7 +8,14 @@ import { useAuth } from '@/context/AuthContext';
 const Dashboard: React.FC = () => {
   const { user, subscription } = useAuth();
   const navigate = useNavigate();
-  const permissionLevel = user?.permissionLevel ?? (user?.role === 'admin' ? 3 : 1);
+  const roleBasedLevel = user?.orgRole === 'org_admin' || user?.orgRole === 'admin'
+    ? 3
+    : user?.orgRole === 'editor'
+      ? 2
+      : user?.orgRole === 'viewer'
+        ? 1
+        : 0;
+  const permissionLevel = Math.max(user?.permissionLevel ?? 0, roleBasedLevel, user?.role === 'admin' ? 3 : 1);
   const isSuperAdmin = permissionLevel >= 4;
   const isChildEditor = permissionLevel === 2;
   const isViewer = permissionLevel <= 1;
@@ -21,6 +28,7 @@ const Dashboard: React.FC = () => {
   const canManageOwnData = permissionLevel >= 2;
   const [pendingMasjids, setPendingMasjids] = useState<PendingMasjidRecord[]>([]);
   const [pendingAddresses, setPendingAddresses] = useState<PendingGeocodeRecord[]>([]);
+  const [missingCoordinatesCount, setMissingCoordinatesCount] = useState(0);
   const [pendingUsersCount, setPendingUsersCount] = useState(0);
   // availableMasjids powers address access/warning checks.
   // - child editors: org-scoped (mirror parent visibility)
@@ -28,8 +36,17 @@ const Dashboard: React.FC = () => {
   const [availableMasjids, setAvailableMasjids] = useState<Masjid[]>([]);
   const [loadingAvailableMasjids, setLoadingAvailableMasjids] = useState(true);
   const showPendingMasjidsButton = !isViewer && pendingMasjids.length > 0;
-  const showPendingAddressesButton = !isViewer && pendingAddresses.length > 0;
-  const canAddAddresses = hasActiveSubscription && canManageOwnData && (isSuperAdmin || (!loadingAvailableMasjids && availableMasjids.length > 0));
+  const showPendingAddressesButton = !isViewer;
+  const canAddAddresses = canManageOwnData;
+  const unifiedButtonSx = {
+    bgcolor: '#1565c0',
+    color: '#fff',
+    fontWeight: 700,
+    textTransform: 'none',
+    '&:hover': {
+      bgcolor: '#0d47a1',
+    },
+  };
 
   const loadPendingMasjids = async (isSuper: boolean, userId: number): Promise<PendingMasjidRecord[]> => {
     if (isSuper) {
@@ -67,6 +84,7 @@ const Dashboard: React.FC = () => {
     if (!user?.id || isViewer) {
       setPendingMasjids([]);
       setPendingAddresses([]);
+      setMissingCoordinatesCount(0);
       setPendingUsersCount(0);
       setAvailableMasjids([]);
       setLoadingAvailableMasjids(false);
@@ -76,7 +94,14 @@ const Dashboard: React.FC = () => {
     loadPendingMasjids(isSuperAdmin, user.id).then(setPendingMasjids).catch(() => setPendingMasjids([]));
     loadPendingAddresses(isSuperAdmin, user.id).then(setPendingAddresses).catch(() => setPendingAddresses([]));
     if (isSuperAdmin) {
-      apiService.getPendingUsers(user.id)
+      apiService.getMissingCoordinates()
+        .then((rows) => setMissingCoordinatesCount(rows.length))
+        .catch(() => setMissingCoordinatesCount(0));
+    } else {
+      setMissingCoordinatesCount(0);
+    }
+    if (isSuperAdmin) {
+      apiService.getPendingUsers()
         .then((rows) => setPendingUsersCount(rows.length))
         .catch(() => setPendingUsersCount(0));
     } else {
@@ -109,8 +134,7 @@ const Dashboard: React.FC = () => {
           {showPendingMasjidsButton && (
             <Button
               variant="contained"
-              color="warning"
-              sx={{ mb: 3, fontWeight: 700, letterSpacing: 1, minWidth: 260 }}
+              sx={{ ...unifiedButtonSx, mb: 3, letterSpacing: 1, minWidth: 260 }}
               onClick={() => navigate('/pending-masjids')}
             >
               Approve Masjid
@@ -129,35 +153,37 @@ const Dashboard: React.FC = () => {
             </Button>
           )}
 
-          {showPendingAddressesButton && (
-            <Button
-              variant="contained"
-              color="info"
-              sx={{ mb: 3, ml: { xs: 0, sm: 2 }, fontWeight: 700, letterSpacing: 1, minWidth: 260 }}
-              onClick={() => navigate('/pending-addresses')}
-            >
-              Approve Addresses
-              {pendingAddresses.length > 0 && (
-                <span style={{
-                  background: '#0288d1',
-                  color: '#fff',
-                  borderRadius: '12px',
-                  padding: '2px 10px',
-                  marginLeft: 12,
-                  fontWeight: 700,
-                  fontSize: 14,
-                  display: 'inline-block',
-                }}>{pendingAddresses.length}</span>
-              )}
-            </Button>
-          )}
-
           <Paper elevation={0} sx={{ p: 2 }}>
             <Grid container spacing={2}>
               {user && (
                 <Grid item xs={12} sm={6} md={4}>
-                  <Button fullWidth variant="contained" onClick={() => navigate('/area-selection')}>
+                  <Button fullWidth variant="contained" sx={unifiedButtonSx} onClick={() => navigate('/area-selection')}>
                     View Data
+                  </Button>
+                </Grid>
+              )}
+
+              {showPendingAddressesButton && (
+                <Grid item xs={12} sm={6} md={4}>
+                  <Button
+                    fullWidth
+                    variant="contained"
+                    sx={{ ...unifiedButtonSx, letterSpacing: 1 }}
+                    onClick={() => navigate('/pending-addresses')}
+                  >
+                    Approve Addresses
+                    {pendingAddresses.length > 0 && (
+                      <span style={{
+                        background: '#d32f2f',
+                        color: '#fff',
+                        borderRadius: '12px',
+                        padding: '2px 10px',
+                        marginLeft: 12,
+                        fontWeight: 700,
+                        fontSize: 14,
+                        display: 'inline-block',
+                      }}>{pendingAddresses.length}</span>
+                    )}
                   </Button>
                 </Grid>
               )}
@@ -168,7 +194,8 @@ const Dashboard: React.FC = () => {
                     <Grid item xs={12} sm={6} md={4}>
                       <Button
                         fullWidth
-                        variant="outlined"
+                        variant="contained"
+                        sx={unifiedButtonSx}
                         onClick={() => navigate('/addresses/new')}
                       >
                         Add New Address
@@ -178,7 +205,8 @@ const Dashboard: React.FC = () => {
                   <Grid item xs={12} sm={6} md={4}>
                     <Button
                       fullWidth
-                      variant="outlined"
+                      variant="contained"
+                      sx={unifiedButtonSx}
                       onClick={() => navigate('/masjids/new')}
                     >
                       Add New Masjid
@@ -200,18 +228,30 @@ const Dashboard: React.FC = () => {
                   <Grid item xs={12} sm={6} md={4}>
                     <Button
                       fullWidth
-                      variant="outlined"
-                      color="secondary"
+                      variant="contained"
+                      sx={unifiedButtonSx}
                       onClick={() => navigate('/missing-coordinates')}
                     >
                       Fix Missing Coordinates
+                      {missingCoordinatesCount > 0 && (
+                        <span style={{
+                          background: '#d32f2f',
+                          color: '#fff',
+                          borderRadius: '12px',
+                          padding: '2px 10px',
+                          marginLeft: 12,
+                          fontWeight: 700,
+                          fontSize: 14,
+                          display: 'inline-block',
+                        }}>{missingCoordinatesCount}</span>
+                      )}
                     </Button>
                   </Grid>
                   <Grid item xs={12} sm={6} md={4}>
                     <Button
                       fullWidth
-                      variant="outlined"
-                      color="warning"
+                      variant="contained"
+                      sx={unifiedButtonSx}
                       onClick={() => navigate('/pending-users')}
                     >
                       Approve New Users
@@ -232,8 +272,8 @@ const Dashboard: React.FC = () => {
                   <Grid item xs={12} sm={6} md={4}>
                     <Button
                       fullWidth
-                      variant="outlined"
-                      color="info"
+                      variant="contained"
+                      sx={unifiedButtonSx}
                       onClick={() => navigate('/geocode-review')}
                     >
                       Review/Approve Submissions
@@ -242,8 +282,8 @@ const Dashboard: React.FC = () => {
                   <Grid item xs={12} sm={6} md={4}>
                     <Button
                       fullWidth
-                      variant="outlined"
-                      color="success"
+                      variant="contained"
+                      sx={unifiedButtonSx}
                       onClick={() => navigate('/view-users')}
                     >
                       View Users
@@ -259,7 +299,7 @@ const Dashboard: React.FC = () => {
                       <Button
                         fullWidth
                         variant="contained"
-                        color="primary"
+                        sx={unifiedButtonSx}
                         onClick={() => navigate('/build-team')}
                       >
                         Manage Team
@@ -270,7 +310,8 @@ const Dashboard: React.FC = () => {
                     <Grid item xs={12} sm={6} md={4}>
                       <Button
                         fullWidth
-                        variant="outlined"
+                        variant="contained"
+                        sx={unifiedButtonSx}
                         onClick={() => navigate('/billing')}
                       >
                         Subscription &amp; Billing
@@ -282,7 +323,7 @@ const Dashboard: React.FC = () => {
                       <Button
                         fullWidth
                         variant="contained"
-                        color="secondary"
+                        sx={unifiedButtonSx}
                         onClick={() => navigate('/create-free-user')}
                       >
                         Add Free Editor User

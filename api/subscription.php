@@ -1,22 +1,6 @@
 <?php
-header('Content-Type: application/json');
-
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
-    http_response_code(204);
-    exit;
-}
-
-function respond($statusCode, $payload) {
-    http_response_code($statusCode);
-    echo json_encode($payload);
-    exit;
-}
-
-include('db.php');
-include('stripe_config.php');
-mysqli_select_db($con, $db);
-
-// ---------------------------------------------------------------
+include_once __DIR__ . '/cors.php';
+// ...existing code...
 // Require authenticated user via token header
 // ---------------------------------------------------------------
 function get_authenticated_user_id($con) {
@@ -26,15 +10,11 @@ function get_authenticated_user_id($con) {
     } else {
         return null;
     }
-    $stmt = mysqli_prepare($con, "SELECT id FROM Login_user_AWS WHERE auth_token = ? AND status = 'true' LIMIT 1");
-    if (!$stmt) return null;
-    mysqli_stmt_bind_param($stmt, 's', $token);
-    mysqli_stmt_execute($stmt);
-    $userId = null;
-    mysqli_stmt_bind_result($stmt, $userId);
-    mysqli_stmt_fetch($stmt);
-    mysqli_stmt_close($stmt);
-    return $userId ? intval($userId) : null;
+    $sql = "SELECT id FROM \"Login_user_AWS\" WHERE auth_token = :token AND status = 'true' LIMIT 1";
+    $stmt = $con->prepare($sql);
+    $stmt->execute([':token' => $token]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    return $row && isset($row['id']) ? intval($row['id']) : null;
 }
 
 // ---------------------------------------------------------------
@@ -61,57 +41,42 @@ function stripe_request($method, $path, $params = []) {
 // GET /api/subscription.php  — return subscription status for the
 //                               current user's organization
 // ---------------------------------------------------------------
+
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     $userId = get_authenticated_user_id($con);
     if (!$userId) {
         respond(401, ['success' => false, 'message' => 'Unauthorized']);
     }
-
-    $stmt = mysqli_prepare($con,
-        "SELECT u.org_id, u.org_role,
-            o.id, o.name, o.plan_status, o.trial_ends_at,
+    $sql = "SELECT u.org_id, u.org_role,
+            o.id as oId, o.name as oName, o.plan_status, o.trial_ends_at,
             o.stripe_customer_id, o.stripe_subscription_id,
             o.max_editors, o.max_viewers, o.monthly_price_cents,
             COALESCE(o.free_account, 0) AS free_account
-         FROM Login_user_AWS u
+         FROM \"Login_user_AWS\" u
          LEFT JOIN organizations o ON o.id = u.org_id
-         WHERE u.id = ? LIMIT 1");
-    mysqli_stmt_bind_param($stmt, 'i', $userId);
-    mysqli_stmt_execute($stmt);
-    $row = null;
-    mysqli_stmt_bind_result($stmt,
-        $orgId, $orgRole,
-        $oId, $oName, $planStatus, $trialEndsAt,
-        $stripeCustomerId, $stripeSubscriptionId,
-        $maxEditors, $maxViewers, $monthlyCents, $freeAccount);
-    if (mysqli_stmt_fetch($stmt)) {
-        $row = compact(
-            'orgId','orgRole','oId','oName','planStatus','trialEndsAt',
-            'stripeCustomerId','stripeSubscriptionId',
-            'maxEditors','maxViewers','monthlyCents','freeAccount'
-        );
-    }
-    mysqli_stmt_close($stmt);
-
-    if (!$row || !$row['orgId']) {
+         WHERE u.id = :userId LIMIT 1";
+    $stmt = $con->prepare($sql);
+    $stmt->execute([':userId' => $userId]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$row || !$row['org_id']) {
         respond(404, ['success' => false, 'message' => 'No organization found for this user']);
     }
 
     // Free accounts are treated as permanently active — skip trial/expiry checks
-    if (!empty($row['freeAccount'])) {
+    if (!empty($row['free_account'])) {
         respond(200, [
             'success' => true,
             'data' => [
-                'orgId'                  => intval($row['orgId']),
+                'orgId'                  => intval($row['org_id']),
                 'orgName'                => $row['oName'],
-                'orgRole'                => $row['orgRole'],
+                'orgRole'                => $row['org_role'],
                 'planStatus'             => 'active',
-                'trialEndsAt'            => $row['trialEndsAt'],
+                'trialEndsAt'            => $row['trial_ends_at'],
                 'trialDaysLeft'          => 0,
-                'hasPaymentMethod'       => !empty($row['stripeSubscriptionId']),
+                'hasPaymentMethod'       => !empty($row['stripe_subscription_id']),
                 'freeAccount'            => true,
-                'maxEditors'             => intval($row['maxEditors']),
-                'maxViewers'             => intval($row['maxViewers']),
+                'maxEditors'             => intval($row['max_editors']),
+                'maxViewers'             => intval($row['max_viewers']),
                 'monthlyPriceCents'      => 0,
                 'stripePublishableKey'   => STRIPE_PUBLISHABLE_KEY,
             ]
@@ -120,14 +85,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
 
     // Auto-expire trial if date has passed and still marked as trial
     $now = new DateTime('now', new DateTimeZone('UTC'));
-    $trialEnd = new DateTime($row['trialEndsAt'], new DateTimeZone('UTC'));
-    if ($row['planStatus'] === 'trial' && $now > $trialEnd) {
-        $expireStmt = mysqli_prepare($con,
-            "UPDATE organizations SET plan_status = 'expired' WHERE id = ?");
-        mysqli_stmt_bind_param($expireStmt, 'i', $row['orgId']);
-        mysqli_stmt_execute($expireStmt);
-        mysqli_stmt_close($expireStmt);
-        $row['planStatus'] = 'expired';
+    $trialEnd = new DateTime($row['trial_ends_at'], new DateTimeZone('UTC'));
+    if ($row['plan_status'] === 'trial' && $now > $trialEnd) {
+        $expireStmt = $con->prepare("UPDATE organizations SET plan_status = 'expired' WHERE id = :orgId");
+        $expireStmt->execute([':orgId' => $row['org_id']]);
+        $row['plan_status'] = 'expired';
     }
 
     $trialDaysLeft = max(0, (int)ceil(($trialEnd->getTimestamp() - $now->getTimestamp()) / 86400));
@@ -135,17 +97,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     respond(200, [
         'success' => true,
         'data' => [
-            'orgId'                  => intval($row['orgId']),
+            'orgId'                  => intval($row['org_id']),
             'orgName'                => $row['oName'],
-            'orgRole'                => $row['orgRole'],
-            'planStatus'             => $row['planStatus'],
-            'trialEndsAt'            => $row['trialEndsAt'],
+            'orgRole'                => $row['org_role'],
+            'planStatus'             => $row['plan_status'],
+            'trialEndsAt'            => $row['trial_ends_at'],
             'trialDaysLeft'          => $trialDaysLeft,
-            'hasPaymentMethod'       => !empty($row['stripeSubscriptionId']),
-                        'freeAccount'            => !empty($row['freeAccount']),
-            'maxEditors'             => intval($row['maxEditors']),
-            'maxViewers'             => intval($row['maxViewers']),
-            'monthlyPriceCents'      => intval($row['monthlyCents']),
+            'hasPaymentMethod'       => !empty($row['stripe_subscription_id']),
+            'freeAccount'            => !empty($row['free_account']),
+            'maxEditors'             => intval($row['max_editors']),
+            'maxViewers'             => intval($row['max_viewers']),
+            'monthlyPriceCents'      => intval($row['monthly_price_cents']),
             'stripePublishableKey'   => STRIPE_PUBLISHABLE_KEY,
         ]
     ]);
@@ -156,6 +118,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
 // action=create_checkout  → create Stripe Checkout Session
 // action=billing_portal   → create Stripe Billing Portal session
 // ---------------------------------------------------------------
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $userId = get_authenticated_user_id($con);
     if (!$userId) {
@@ -168,26 +131,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = isset($input['action']) ? trim($input['action']) : '';
 
     // Load org data for this user
-    $stmt = mysqli_prepare($con,
-        "SELECT u.org_id, u.org_role, u.email,
+    $sql = "SELECT u.org_id, u.org_role, u.email,
                 o.stripe_customer_id, o.stripe_subscription_id,
                 o.plan_status, o.stripe_price_id
-         FROM Login_user_AWS u
+         FROM \"Login_user_AWS\" u
          LEFT JOIN organizations o ON o.id = u.org_id
-         WHERE u.id = ? LIMIT 1");
-    mysqli_stmt_bind_param($stmt, 'i', $userId);
-    mysqli_stmt_execute($stmt);
-    $orgId = $orgRole = $userEmail = $customerId = $subId = $planStatus = $orgPriceId = null;
-    mysqli_stmt_bind_result($stmt, $orgId, $orgRole, $userEmail, $customerId, $subId, $planStatus, $orgPriceId);
-    mysqli_stmt_fetch($stmt);
-    mysqli_stmt_close($stmt);
-
-    if (!$orgId) {
+         WHERE u.id = :userId LIMIT 1";
+    $stmt = $con->prepare($sql);
+    $stmt->execute([':userId' => $userId]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$row || !$row['org_id']) {
         respond(404, ['success' => false, 'message' => 'No organization found for this user']);
     }
-    if ($orgRole !== 'org_admin') {
+    if ($row['org_role'] !== 'org_admin') {
         respond(403, ['success' => false, 'message' => 'Only the organization admin can manage billing']);
     }
+    $orgId = $row['org_id'];
+    $orgRole = $row['org_role'];
+    $userEmail = $row['email'];
+    $customerId = $row['stripe_customer_id'];
+    $subId = $row['stripe_subscription_id'];
+    $planStatus = $row['plan_status'];
+    $orgPriceId = $row['stripe_price_id'];
 
     // ----------------------------------------------------------
     // ACTION: create_checkout

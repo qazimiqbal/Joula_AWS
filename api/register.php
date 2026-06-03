@@ -1,4 +1,5 @@
 <?php
+include_once __DIR__ . '/cors.php';
 header('Content-Type: application/json');
 
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
@@ -157,10 +158,12 @@ function has_column($con, $dbName, $tableName, $columnName) {
         }
     }
 
+    // Always check for lowercase permissions for PostgreSQL
+    $columnNameLower = strtolower($columnName);
     $sql = "SELECT 1 FROM information_schema.columns WHERE table_schema = ? AND table_name = ? AND column_name = ? LIMIT 1";
     $stmt = mysqli_prepare($con, $sql);
     if (!$stmt) return false;
-    mysqli_stmt_bind_param($stmt, 'sss', $dbName, $tableName, $columnName);
+    mysqli_stmt_bind_param($stmt, 'sss', $dbName, $tableName, $columnNameLower);
     mysqli_stmt_execute($stmt);
     mysqli_stmt_bind_result($stmt, $exists);
     $found = mysqli_stmt_fetch($stmt);
@@ -193,7 +196,7 @@ $hasPhone = has_column($con, $db, $loginTable, 'phone');
 $hasMasjid = has_column($con, $db, $loginTable, 'Masjid');
 $hasLocality = has_column($con, $db, $loginTable, 'Locality');
 $hasHalaqa = has_column($con, $db, $loginTable, 'Halaqa');
-$hasPermissions = has_column($con, $db, $loginTable, 'Permissions');
+$hasPermissions = has_column($con, $db, $loginTable, 'permissions');
 $hasPassChange = has_column($con, $db, $loginTable, 'Pass_change');
 $hasStatus = has_column($con, $db, $loginTable, 'status');
 $hasOrgRole = has_column($con, $db, $loginTable, 'org_role');
@@ -297,7 +300,7 @@ if ($hasHalaqa) {
     $bindValues[] = $halaqa;
 }
 if ($hasPermissions) {
-    $insertColumns[] = 'Permissions';
+    $insertColumns[] = 'permissions';
     $insertValuesSql[] = '?';
     $bindTypes .= 's';
     $bindValues[] = $permissions;

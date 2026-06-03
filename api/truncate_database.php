@@ -29,7 +29,7 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     exit;
 }
 
-include('db.php');
+require_once 'db.pgsql.php';
 
 try {
     // Get list of all tables
@@ -53,39 +53,35 @@ try {
     $truncatedTables = [];
     $failedTables = [];
 
+    // Get list of all tables in the current schema
+    $tables = [];
+    $stmt = $pdo->query("SELECT tablename FROM pg_tables WHERE schemaname = 'public'");
+    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+        $tables[] = $row['tablename'];
+    }
+
+    $truncatedTables = [];
+    $failedTables = [];
+
+    // Disable triggers (for foreign key constraints)
+    $pdo->exec("SET session_replication_role = 'replica'");
+
     // Truncate each table
     foreach ($tables as $table) {
-        $truncateSql = "TRUNCATE TABLE `" . mysqli_real_escape_string($con, $table) . "`";
-        $truncateResult = mysqli_query($con, $truncateSql);
-        
-        if ($truncateResult === false) {
-            $failedTables[$table] = mysqli_error($con);
-        } else {
+        try {
+            $pdo->exec('TRUNCATE TABLE "' . $table . '" RESTART IDENTITY CASCADE');
             $truncatedTables[] = $table;
+        } catch (PDOException $e) {
+            $failedTables[$table] = $e->getMessage();
         }
     }
 
-    // Re-enable foreign key checks
-    $enableFkCheck = mysqli_query($con, "SET FOREIGN_KEY_CHECKS=1");
-    if (!$enableFkCheck) {
-        throw new Exception('Failed to re-enable foreign key checks: ' . mysqli_error($con));
-    }
+    // Re-enable triggers
+    $pdo->exec("SET session_replication_role = 'origin'");
 
-    http_response_code(200);
     echo json_encode([
         'success' => true,
-        'message' => 'Database truncation completed',
-        'truncated_tables' => $truncatedTables,
-        'truncated_count' => count($truncatedTables),
-        'failed_tables' => $failedTables,
-        'failed_count' => count($failedTables)
+        'truncated' => $truncatedTables,
+        'failed' => $failedTables,
     ]);
-
-} catch (Exception $e) {
-    http_response_code(500);
-    echo json_encode([
         'success' => false,
-        'message' => 'Truncation failed: ' . $e->getMessage()
-    ]);
-}
-?>

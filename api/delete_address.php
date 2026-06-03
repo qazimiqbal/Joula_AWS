@@ -1,7 +1,9 @@
+
 <?php
-// delete_address.php: Delete a pending address by ID
+include_once __DIR__ . '/cors.php';
+// delete_address.php: Delete a pending address by ID (Postgres/PDO)
 header('Content-Type: application/json');
-require_once 'db.php';
+require_once 'db.pgsql.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     echo json_encode(['success' => false, 'message' => 'Invalid request method']);
@@ -16,20 +18,14 @@ if ($addressId <= 0) {
     exit;
 }
 
-$stmt = mysqli_prepare($con, 'DELETE FROM Addresses_AWS WHERE ID = ?');
-if (!$stmt) {
-    echo json_encode(['success' => false, 'message' => 'Failed to prepare statement']);
-    exit;
+try {
+    $stmt = $pdo->prepare('DELETE FROM "Addresses_AWS" WHERE "ID" = :id');
+    $success = $stmt->execute([':id' => $addressId]);
+    if ($success && $stmt->rowCount() > 0) {
+        echo json_encode(['success' => true]);
+    } else {
+        echo json_encode(['success' => false, 'message' => 'Failed to delete address']);
+    }
+} catch (PDOException $e) {
+    echo json_encode(['success' => false, 'message' => 'DB error: ' . $e->getMessage()]);
 }
-
-mysqli_stmt_bind_param($stmt, 'i', $addressId);
-$success = mysqli_stmt_execute($stmt);
-
-if ($success) {
-    echo json_encode(['success' => true]);
-} else {
-    echo json_encode(['success' => false, 'message' => 'Failed to delete address']);
-}
-
-mysqli_stmt_close($stmt);
-$con->close();

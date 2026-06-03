@@ -1,4 +1,5 @@
 <?php
+include_once __DIR__ . '/cors.php';
 header('Content-Type: application/json');
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
@@ -25,126 +26,85 @@ function permission_to_level($permissionRaw) {
     return 0;
 }
 
-function get_authenticated_user($con) {
+function coordinates_filter_sql($alias = '') {
+    $prefix = $alias !== '' ? $alias . '.' : '';
+    return 'COALESCE(TRIM(' . $prefix . '"Coordinates"), \'\') <> \'\' AND ' . $prefix . '"Coordinates" <> ' . chr(39) . ',' . chr(39);
+}
+
+function get_authenticated_user($pdo) {
     $authHeader = isset($_SERVER['HTTP_AUTHORIZATION']) ? $_SERVER['HTTP_AUTHORIZATION'] : '';
     if (strpos($authHeader, 'Bearer ') !== 0) return null;
-
     $token = substr($authHeader, 7);
-    $stmt = mysqli_prepare(
-        $con,
-        "SELECT id, org_id, org_role, Permissions
-         FROM Login_user_AWS
-         WHERE auth_token = ? AND status = 'true' LIMIT 1"
-    );
 
-    if (!$stmt) return null;
-    mysqli_stmt_bind_param($stmt, 's', $token);
-    mysqli_stmt_execute($stmt);
-    $userId = $orgId = null;
-    $orgRole = $permissionsRaw = null;
-    mysqli_stmt_bind_result($stmt, $userId, $orgId, $orgRole, $permissionsRaw);
-    $found = mysqli_stmt_fetch($stmt);
-    mysqli_stmt_close($stmt);
-
-    if (!$found || !$userId) return null;
+    $sql = 'SELECT id, org_id, org_role, permissions FROM "Login_user_AWS" WHERE auth_token = :token AND status = :status LIMIT 1';
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute([':token' => $token, ':status' => 'true']);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$row) return null;
 
     return [
-        'id' => intval($userId),
-        'orgId' => intval($orgId),
-        'orgRole' => $orgRole,
-        'permissionLevel' => permission_to_level($permissionsRaw),
+        'id' => intval($row['id']),
+        'orgId' => intval($row['org_id']),
+        'orgRole' => (string)$row['org_role'],
+        'permissionLevel' => permission_to_level($row['permissions']),
     ];
 }
 
-function resolve_effective_owner_id($con, $me) {
+function resolve_effective_owner_id($pdo, $me) {
     if ($me['permissionLevel'] >= 3 || empty($me['orgId'])) {
         return intval($me['id']);
     }
 
-    $ownerStmt = mysqli_prepare(
-        $con,
-        "SELECT id
-         FROM Login_user_AWS
-         WHERE org_id = ?
-             AND status = 'true'
-             AND (org_role = 'org_admin' OR org_role = 'admin' OR Permissions = '3' OR Permissions = '4')
-         ORDER BY
-             CASE
-                 WHEN org_role = 'org_admin' THEN 0
-                 WHEN org_role = 'admin' THEN 1
-                 ELSE 2
-             END,
-             id ASC
-         LIMIT 1"
-    );
-
-    if (!$ownerStmt) return intval($me['id']);
-    mysqli_stmt_bind_param($ownerStmt, 'i', $me['orgId']);
-    mysqli_stmt_execute($ownerStmt);
-    $ownerId = null;
-    mysqli_stmt_bind_result($ownerStmt, $ownerId);
-    $found = mysqli_stmt_fetch($ownerStmt);
-    mysqli_stmt_close($ownerStmt);
-
-    return ($found && $ownerId) ? intval($ownerId) : intval($me['id']);
+    $sql = 'SELECT id FROM "Login_user_AWS" WHERE org_id = :orgId AND status = :status AND (org_role = :orgAdmin OR org_role = :admin OR permissions = :perm3 OR permissions = :perm4) ORDER BY CASE WHEN org_role = :orgAdmin THEN 0 WHEN org_role = :admin THEN 1 ELSE 2 END, id ASC LIMIT 1';
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute([
+        ':orgId' => $me['orgId'],
+        ':status' => 'true',
+        ':orgAdmin' => 'org_admin',
+        ':admin' => 'admin',
+        ':perm3' => '3',
+        ':perm4' => '4',
+    ]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    return ($row && isset($row['id'])) ? intval($row['id']) : intval($me['id']);
 }
 
-include('db.php');
+require_once 'db.pgsql.php';
 
-$me = get_authenticated_user($con);
+$me = get_authenticated_user($pdo);
 if (!$me) {
-    respond(401, array('success' => false, 'message' => 'Unauthorized'));
+    respond(401, ['success' => false, 'message' => 'Unauthorized']);
 }
 if ($me['permissionLevel'] < 2) {
-    respond(403, array('success' => false, 'message' => 'Only admins and editors can review submissions'));
+    respond(403, ['success' => false, 'message' => 'Only admins and editors can review submissions']);
 }
 
+$effectiveOwnerId = resolve_effective_owner_id($pdo, $me);
+
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
-    $requestedCreatedBy = isset($_GET['createdBy']) ? intval($_GET['createdBy']) : 0;
-    $isSuperAdmin = $me['permissionLevel'] >= 4;
-    $effectiveOwnerId = resolve_effective_owner_id($con, $me);
+    $createdBy = isset($_GET['createdBy']) ? intval($_GET['createdBy']) : 0;
+    $sql = 'SELECT a."ID", a."Name", a."H_No", a."Apt_No", a."St_Name", a."City", a."State", a."Zip", a."Locality", a."Coordinates", a."Comments", a."Last_Visit", a."Verified", a."Masjid", a."uploaded_by", COALESCE(u."username", \'\') AS submitted_by FROM "Addresses_AWS" a LEFT JOIN "Login_user_AWS" u ON u."id" = a."uploaded_by" WHERE COALESCE(a."Clear", 1) = 0 AND ' . coordinates_filter_sql('a');
+    $params = [];
 
-    $createdBy = $isSuperAdmin ? $requestedCreatedBy : $effectiveOwnerId;
-
-    if ($createdBy > 0) {
-        $stmt = mysqli_prepare(
-            $con,
-            "SELECT a.ID, a.Name, a.H_No, a.Apt_No, a.St_Name, a.City, a.State, a.Zip, a.Locality, a.Coordinates,
-                a.Comments, a.Last_Visit, a.Verified, a.Masjid,
-                    a.uploaded_by, COALESCE(u.username, '') AS submitted_by
-             FROM Addresses_AWS a
-             LEFT JOIN Login_user_AWS u ON u.id = a.uploaded_by
-             WHERE COALESCE(a.`Clear`, 1) = 0 AND a.uploaded_by = ?
-             ORDER BY a.City, a.St_Name, a.H_No"
-        );
-        if ($stmt) {
-            mysqli_stmt_bind_param($stmt, 'i', $createdBy);
+    if ($me['permissionLevel'] >= 4) {
+        if ($createdBy > 0) {
+            $sql .= ' AND a."uploaded_by" = :createdBy';
+            $params[':createdBy'] = $createdBy;
         }
     } else {
-        $stmt = mysqli_prepare(
-            $con,
-            "SELECT a.ID, a.Name, a.H_No, a.Apt_No, a.St_Name, a.City, a.State, a.Zip, a.Locality, a.Coordinates,
-                a.Comments, a.Last_Visit, a.Verified, a.Masjid,
-                    a.uploaded_by, COALESCE(u.username, '') AS submitted_by
-             FROM Addresses_AWS a
-             LEFT JOIN Login_user_AWS u ON u.id = a.uploaded_by
-             WHERE COALESCE(a.`Clear`, 1) = 0
-             ORDER BY a.City, a.St_Name, a.H_No"
-        );
+        $sql .= ' AND a."uploaded_by" = :ownerId';
+        $params[':ownerId'] = $effectiveOwnerId;
     }
 
-    if (!$stmt) {
-        respond(500, array('success' => false, 'message' => 'Failed to prepare review list query'));
-    }
+    $sql .= ' ORDER BY a."City", a."St_Name", a."H_No"';
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute($params);
 
-    mysqli_stmt_execute($stmt);
-    mysqli_stmt_bind_result($stmt, $id, $name, $hNo, $aptNo, $stName, $city, $state, $zip, $locality, $coordinates, $comments, $lastVisit, $verified, $masjid, $uploadedBy, $submittedBy);
-
-    $rows = array();
-    while (mysqli_stmt_fetch($stmt)) {
+    $rows = [];
+    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
         $lat = null;
         $lng = null;
-        $parts = explode(',', (string)$coordinates);
+        $parts = explode(',', (string)($row['Coordinates'] ?? ''));
         if (count($parts) === 2) {
             $latRaw = trim($parts[0]);
             $lngRaw = trim($parts[1]);
@@ -154,195 +114,127 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
             }
         }
 
-        $rows[] = array(
-            'id' => intval($id),
-            'name' => $name,
-            'houseNo' => $hNo,
-            'aptNo' => $aptNo,
-            'streetName' => $stName,
-            'city' => $city,
-            'state' => $state,
-            'zip' => $zip,
-            'locality' => $locality,
-            'comments' => $comments,
-            'lastVisit' => $lastVisit,
-            'verified' => $verified,
-            'masjid' => $masjid,
-            'coordinates' => $coordinates,
+        $rows[] = [
+            'id' => intval($row['ID']),
+            'name' => $row['Name'],
+            'houseNo' => $row['H_No'],
+            'aptNo' => $row['Apt_No'],
+            'streetName' => $row['St_Name'],
+            'city' => $row['City'],
+            'state' => $row['State'],
+            'zip' => $row['Zip'],
+            'locality' => $row['Locality'],
+            'comments' => $row['Comments'],
+            'lastVisit' => $row['Last_Visit'],
+            'verified' => $row['Verified'],
+            'masjid' => $row['Masjid'],
+            'coordinates' => $row['Coordinates'],
             'latitude' => $lat,
             'longitude' => $lng,
-            'uploadedBy' => isset($uploadedBy) ? intval($uploadedBy) : null,
-            'submittedBy' => $submittedBy,
-        );
+            'uploadedBy' => isset($row['uploaded_by']) ? intval($row['uploaded_by']) : null,
+            'submittedBy' => $row['submitted_by'],
+        ];
     }
 
-    mysqli_stmt_close($stmt);
-    respond(200, array('success' => true, 'data' => $rows, 'count' => count($rows)));
+    respond(200, ['success' => true, 'data' => $rows, 'count' => count($rows)]);
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $rawInput = file_get_contents('php://input');
-    $input = json_decode($rawInput, true);
+    $input = json_decode(file_get_contents('php://input'), true);
     if (!is_array($input)) {
         $input = $_POST;
     }
 
     $action = isset($input['action']) ? trim((string)$input['action']) : 'approve';
-    $id = isset($input['id']) ? intval($input['id']) : 0;
-
-    $isSuperAdmin = $me['permissionLevel'] >= 4;
-    $effectiveOwnerId = resolve_effective_owner_id($con, $me);
 
     if ($action === 'approve_all') {
-        if ($isSuperAdmin) {
-            $stmt = mysqli_prepare($con, "UPDATE Addresses_AWS SET `Clear` = 1 WHERE COALESCE(`Clear`, 1) = 0 AND (Coordinates IS NOT NULL AND Coordinates != '')");
+        if ($me['permissionLevel'] >= 4) {
+            $sql = 'UPDATE "Addresses_AWS" SET "Clear" = 1 WHERE COALESCE("Clear", 1) = 0 AND ' . coordinates_filter_sql();
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute();
         } else {
-            $stmt = mysqli_prepare($con, "UPDATE Addresses_AWS SET `Clear` = 1 WHERE COALESCE(`Clear`, 1) = 0 AND uploaded_by = ? AND (Coordinates IS NOT NULL AND Coordinates != '')");
+            $sql = 'UPDATE "Addresses_AWS" SET "Clear" = 1 WHERE COALESCE("Clear", 1) = 0 AND "uploaded_by" = :ownerId AND ' . coordinates_filter_sql();
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute([':ownerId' => $effectiveOwnerId]);
         }
 
-        if (!$stmt) {
-            respond(500, array('success' => false, 'message' => 'Failed to prepare approve all query'));
-        }
-
-        if (!$isSuperAdmin) {
-            mysqli_stmt_bind_param($stmt, 'i', $effectiveOwnerId);
-        }
-
-        mysqli_stmt_execute($stmt);
-        $affected = mysqli_stmt_affected_rows($stmt);
-        mysqli_stmt_close($stmt);
-
-        respond(200, array('success' => true, 'message' => 'Pending addresses approved', 'approvedCount' => max(0, intval($affected))));
-    }
-
-    if ($id <= 0) {
-        respond(400, array('success' => false, 'message' => 'id is required'));
-    }
-
-    if (!$isSuperAdmin) {
-        $ownerStmt = mysqli_prepare($con, 'SELECT uploaded_by FROM Addresses_AWS WHERE ID = ? LIMIT 1');
-        if (!$ownerStmt) {
-            respond(500, array('success' => false, 'message' => 'Failed to verify ownership'));
-        }
-        mysqli_stmt_bind_param($ownerStmt, 'i', $id);
-        mysqli_stmt_execute($ownerStmt);
-        $ownerId = null;
-        mysqli_stmt_bind_result($ownerStmt, $ownerId);
-        mysqli_stmt_fetch($ownerStmt);
-        mysqli_stmt_close($ownerStmt);
-
-        if (intval($ownerId) !== $effectiveOwnerId) {
-            respond(403, array('success' => false, 'message' => 'You can only approve submissions for your parent account'));
-        }
+        respond(200, [
+            'success' => true,
+            'message' => 'Pending addresses approved',
+            'approvedCount' => $stmt->rowCount(),
+        ]);
     }
 
     if ($action === 'update') {
-        $name = isset($input['name']) ? trim((string)$input['name']) : '';
-        $houseNo = isset($input['houseNo']) ? trim((string)$input['houseNo']) : '';
-        $aptNo = isset($input['aptNo']) ? trim((string)$input['aptNo']) : '';
-        $streetName = isset($input['streetName']) ? trim((string)$input['streetName']) : '';
-        $city = isset($input['city']) ? trim((string)$input['city']) : '';
-        $state = isset($input['state']) ? trim((string)$input['state']) : '';
-        $zip = isset($input['zip']) ? trim((string)$input['zip']) : '';
-        $locality = isset($input['locality']) ? trim((string)$input['locality']) : '';
-        $comments = isset($input['comments']) ? trim((string)$input['comments']) : '';
-        $lastVisit = isset($input['lastVisit']) ? trim((string)$input['lastVisit']) : '';
-        $masjid = isset($input['masjid']) ? trim((string)$input['masjid']) : '';
-        $verifiedRaw = isset($input['verified']) ? strtoupper(trim((string)$input['verified'])) : 'N';
-        $coordinatesRaw = isset($input['coordinates']) ? trim((string)$input['coordinates']) : '';
-
-        if ($name === '') {
-            respond(400, array('success' => false, 'message' => 'Please fill in name field'));
-        }
-        if ($houseNo === '') {
-            respond(400, array('success' => false, 'message' => 'Please fill in houseNo field'));
-        }
-        if ($streetName === '') {
-            respond(400, array('success' => false, 'message' => 'Please fill in streetName field'));
-        }
-        if ($city === '') {
-            respond(400, array('success' => false, 'message' => 'Please fill in city field'));
-        }
-        if ($state === '') {
-            respond(400, array('success' => false, 'message' => 'Please fill in state field'));
-        }
-        if ($zip === '') {
-            respond(400, array('success' => false, 'message' => 'Please fill in zip field'));
+        $id = isset($input['id']) ? intval($input['id']) : 0;
+        if ($id <= 0) {
+            respond(400, ['success' => false, 'message' => 'id is required']);
         }
 
-        $verified = ($verifiedRaw === 'Y') ? 'Y' : 'N';
+        $fieldMap = [
+            'name' => 'Name',
+            'houseNo' => 'H_No',
+            'aptNo' => 'Apt_No',
+            'streetName' => 'St_Name',
+            'city' => 'City',
+            'state' => 'State',
+            'zip' => 'Zip',
+            'locality' => 'Locality',
+            'comments' => 'Comments',
+            'lastVisit' => 'Last_Visit',
+            'masjid' => 'Masjid',
+            'verified' => 'Verified',
+            'coordinates' => 'Coordinates',
+        ];
 
-        if ($lastVisit !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $lastVisit)) {
-            respond(400, array('success' => false, 'message' => 'lastVisit must be YYYY-MM-DD'));
-        }
-
-        $coordinates = '';
-        if ($coordinatesRaw !== '') {
-            if (!preg_match('/^\s*-?\d+(?:\.\d+)?\s*,\s*-?\d+(?:\.\d+)?\s*$/', $coordinatesRaw)) {
-                respond(400, array('success' => false, 'message' => 'coordinates must be in "lat,lng" format'));
+        $setParts = [];
+        $params = [':id' => $id];
+        foreach ($fieldMap as $key => $column) {
+            if (array_key_exists($key, $input)) {
+                $setParts[] = '"' . $column . '" = :' . $key;
+                $params[':' . $key] = trim((string)$input[$key]);
             }
-            $parts = explode(',', $coordinatesRaw, 2);
-            $coordinates = trim($parts[0]) . ',' . trim($parts[1]);
         }
 
-        $stmt = mysqli_prepare(
-            $con,
-            'UPDATE Addresses_AWS
-             SET Name = ?, H_No = ?, Apt_No = ?, St_Name = ?, City = ?, State = ?, Zip = ?, Locality = ?,
-                 Comments = ?, Last_Visit = ?, Masjid = ?, Verified = ?, Coordinates = ?
-             WHERE ID = ?'
-        );
-
-        if (!$stmt) {
-            respond(500, array('success' => false, 'message' => 'Failed to prepare update query'));
+        if (count($setParts) === 0) {
+            respond(400, ['success' => false, 'message' => 'No fields to update']);
         }
 
-        mysqli_stmt_bind_param(
-            $stmt,
-            'sssssssssssssi',
-            $name,
-            $houseNo,
-            $aptNo,
-            $streetName,
-            $city,
-            $state,
-            $zip,
-            $locality,
-            $comments,
-            $lastVisit,
-            $masjid,
-            $verified,
-            $coordinates,
-            $id
-        );
-
-        mysqli_stmt_execute($stmt);
-        $affected = mysqli_stmt_affected_rows($stmt);
-        mysqli_stmt_close($stmt);
-
-        if ($affected < 0) {
-            respond(500, array('success' => false, 'message' => 'Failed to update address'));
+        $sql = 'UPDATE "Addresses_AWS" SET ' . implode(', ', $setParts) . ' WHERE "ID" = :id AND COALESCE("Clear", 1) = 0';
+        if ($me['permissionLevel'] < 4) {
+            $sql .= ' AND "uploaded_by" = :ownerId';
+            $params[':ownerId'] = $effectiveOwnerId;
         }
 
-        respond(200, array('success' => true, 'message' => 'Address updated'));
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($params);
+        if ($stmt->rowCount() <= 0) {
+            respond(404, ['success' => false, 'message' => 'Address not found, unchanged, or not permitted']);
+        }
+
+        respond(200, ['success' => true, 'message' => 'Pending address updated']);
     }
 
-    $stmt = mysqli_prepare($con, 'UPDATE Addresses_AWS SET `Clear` = 1 WHERE ID = ?');
-    if (!$stmt) {
-        respond(500, array('success' => false, 'message' => 'Failed to prepare approval update query'));
+    $id = isset($input['id']) ? intval($input['id']) : 0;
+    if ($id <= 0) {
+        respond(400, ['success' => false, 'message' => 'id is required']);
     }
 
-    mysqli_stmt_bind_param($stmt, 'i', $id);
-    mysqli_stmt_execute($stmt);
-    $affected = mysqli_stmt_affected_rows($stmt);
-    mysqli_stmt_close($stmt);
-
-    if ($affected <= 0) {
-        respond(404, array('success' => false, 'message' => 'Address not found or already approved'));
+    if ($me['permissionLevel'] >= 4) {
+        $sql = 'UPDATE "Addresses_AWS" SET "Clear" = 1 WHERE "ID" = :id AND COALESCE("Clear", 1) = 0 AND ' . coordinates_filter_sql();
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute([':id' => $id]);
+    } else {
+        $sql = 'UPDATE "Addresses_AWS" SET "Clear" = 1 WHERE "ID" = :id AND COALESCE("Clear", 1) = 0 AND "uploaded_by" = :ownerId AND ' . coordinates_filter_sql();
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute([':id' => $id, ':ownerId' => $effectiveOwnerId]);
     }
 
-    respond(200, array('success' => true, 'message' => 'Address approved'));
+    if ($stmt->rowCount() <= 0) {
+        respond(404, ['success' => false, 'message' => 'Address not found or already approved']);
+    }
+
+    respond(200, ['success' => true, 'message' => 'Address approved for regular map/list display']);
 }
 
-respond(405, array('success' => false, 'message' => 'Method not allowed'));
-?>
+respond(405, ['success' => false, 'message' => 'Method not allowed']);

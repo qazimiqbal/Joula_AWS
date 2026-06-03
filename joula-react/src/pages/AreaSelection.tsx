@@ -136,10 +136,10 @@ const AreaSelection: React.FC = () => {
 
   const handleShowAddressesOnMap = () => {
     if (selectedAddressMasjidId === 'all') {
-      navigate(`/map?${buildScopedParams({ allAddresses: '1', showMasjids: '1' }).toString()}`)
+      navigate(`/map?${buildScopedParams({ allAddresses: '1' }).toString()}`)
       return
     }
-    navigate(`/map?${buildScopedParams({ masjidId: selectedAddressMasjidId, showMasjids: '1' }).toString()}`)
+    navigate(`/map?${buildScopedParams({ masjidId: selectedAddressMasjidId }).toString()}`)
   }
 
   const handleRadiusSearch = () => {

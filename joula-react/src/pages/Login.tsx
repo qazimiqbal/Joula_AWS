@@ -76,9 +76,9 @@ const Login: React.FC = () => {
   const { login, loginWithGoogle } = useAuth()
   const navigate = useNavigate()
 
-  const authMode = useMemo<'local' | 'hybrid' | 'google'>(() => {
+  const authMode = useMemo<'local' | 'hybrid' | 'google' | 'auto'>(() => {
     const raw = String(import.meta.env.VITE_AUTH_MODE ?? 'local').trim().toLowerCase()
-    if (raw === 'google' || raw === 'hybrid' || raw === 'local') {
+    if (raw === 'google' || raw === 'hybrid' || raw === 'local' || raw === 'auto') {
       return raw
     }
     return 'local'
@@ -101,9 +101,12 @@ const Login: React.FC = () => {
     setLoading(true)
 
     try {
+      console.log('Attempting login with:', email)
       await login(email, password)
+      console.log('Login successful, navigating to /dashboard')
       navigate('/dashboard')
     } catch (err: any) {
+      console.error('Login error:', err)
       setError(err.message || 'Login failed. Please check your credentials.')
     } finally {
       setLoading(false)

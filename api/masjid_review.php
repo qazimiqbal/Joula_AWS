@@ -41,7 +41,7 @@ function get_authenticated_user($con) {
 
     $token = substr($authHeader, 7);
     $stmt = mysqli_prepare($con,
-        "SELECT id, org_id, org_role, Permissions
+        "SELECT id, org_id, org_role, permissions
          FROM Login_user_AWS
          WHERE auth_token = ? AND status = 'true' LIMIT 1");
 
@@ -74,7 +74,7 @@ function resolve_effective_owner_id($con, $me) {
                  FROM Login_user_AWS
                  WHERE org_id = ?
                      AND status = 'true'
-                     AND (org_role = 'org_admin' OR org_role = 'admin' OR Permissions = '3' OR Permissions = '4')
+                     AND (org_role = 'org_admin' OR org_role = 'admin' OR permissions = '3' OR permissions = '4')
                  ORDER BY
                      CASE
                          WHEN org_role = 'org_admin' THEN 0

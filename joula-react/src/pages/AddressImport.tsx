@@ -482,6 +482,11 @@ const AddressImport: React.FC = () => {
           <Typography variant="subtitle1" gutterBottom>
             Import Result
           </Typography>
+          {result.success && result.inserted > 0 && (
+            <Alert severity="success" sx={{ mb: 2 }}>
+              Import verified successfully. {result.inserted} address{result.inserted === 1 ? '' : 'es'} imported.
+            </Alert>
+          )}
           <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 1 }}>
             <Chip label={`${result.inserted} inserted`} color="success" size="small" />
             <Chip label={`${result.skipped} skipped (duplicates)`} color="default" size="small" />
@@ -532,13 +537,22 @@ const AddressImport: React.FC = () => {
       )}
 
       {/* CSV preview */}
-      {preview && preview.headers.length > 0 && !result && !validationResult?.canImport && (
+      {preview && preview.headers.length > 0 && !result && (
         <Paper variant="outlined" sx={{ p: 2 }}>
           <Typography variant="subtitle2" gutterBottom>
             Preview (first {preview.rows.length} data rows)
           </Typography>
-          <TableContainer sx={{ overflowX: 'auto' }}>
-            <Table size="small" sx={{ minWidth: 600 }}>
+          <Typography variant="caption" color="text.secondary" sx={{ mb: 1, display: 'block' }}>
+            Scroll horizontally to view all columns.
+          </Typography>
+          <TableContainer sx={{ width: '100%', overflowX: 'auto', overflowY: 'hidden' }}>
+            <Table
+              size="small"
+              sx={{
+                width: 'max-content',
+                minWidth: `${Math.max(800, preview.headers.length * 140)}px`,
+              }}
+            >
               <TableHead>
                 <TableRow>
                   {preview.headers.map((h) => (

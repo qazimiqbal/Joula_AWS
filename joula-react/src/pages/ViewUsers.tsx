@@ -83,17 +83,13 @@ const ViewUsers: React.FC = () => {
     if (!limitsDialog) return;
     setLimitsDialog((d) => d ? { ...d, saving: true, error: '' } : d);
     try {
-      const API_BASE = import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? '' : '/Joula');
-      const token = localStorage.getItem('authToken');
-      const res = await fetch(`${API_BASE}/api/admin_users.php?action=update_org_limits`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ orgId: limitsDialog.user.orgId, maxEditors: limitsDialog.maxEditors, maxViewers: limitsDialog.maxViewers, freeAccount: limitsDialog.freeAccount }),
+      await apiService.adminUpdateOrgLimits(limitsDialog.user.orgId, {
+        maxEditors: limitsDialog.maxEditors,
+        maxViewers: limitsDialog.maxViewers,
+        freeAccount: limitsDialog.freeAccount,
       });
-      const json = await res.json();
-      if (!json.success) throw new Error(json.message || 'Save failed');
       setUsers((prev) => prev.map((u) =>
-        u.id === limitsDialog.user.id
+        u.orgId === limitsDialog.user.orgId
           ? { ...u, maxEditors: limitsDialog.maxEditors, maxViewers: limitsDialog.maxViewers, freeAccount: limitsDialog.freeAccount }
           : u
       ));

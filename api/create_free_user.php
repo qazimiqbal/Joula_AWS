@@ -1,4 +1,5 @@
 <?php
+include_once __DIR__ . '/cors.php';
 header('Content-Type: application/json');
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: POST, OPTIONS');
@@ -39,7 +40,8 @@ if (strpos($authHeader, 'Bearer ') !== 0) {
 }
 $token = substr($authHeader, 7);
 $tokenEsc = mysqli_real_escape_string($con, $token);
-$resU = mysqli_query($con, "SELECT id, Permissions FROM Login_user_AWS WHERE auth_token = '$tokenEsc' AND status = 'true' LIMIT 1");
+// Use lowercase permissions for PostgreSQL
+$resU = mysqli_query($con, "SELECT id, permissions FROM Login_user_AWS WHERE auth_token = '$tokenEsc' AND status = 'true' LIMIT 1");
 if (!$resU) {
     respond(500, ['success' => false, 'message' => 'Auth query failed: ' . mysqli_error($con)]);
 }
@@ -48,7 +50,7 @@ mysqli_free_result($resU);
 if (!$rowU) {
     respond(401, ['success' => false, 'message' => 'Unauthorized']);
 }
-$permissionLevel = permission_to_level($rowU['Permissions']);
+$permissionLevel = permission_to_level($rowU['permissions']);
 if ($permissionLevel < 4) {
     respond(403, ['success' => false, 'message' => 'Only super admins can create free users']);
 }
@@ -103,10 +105,10 @@ $safePhone    = $hasPhone ? mysqli_real_escape_string($con, $phone) : '';
 $hashedPw     = md5($password); // MD5 matches existing auth pattern in login.php
 
 if ($hasPhone) {
-    $insertSql = "INSERT INTO Login_user_AWS (username, email, password, phone, Permissions, org_role, org_id, status, is_free_user)
+    $insertSql = "INSERT INTO Login_user_AWS (username, email, password, phone, permissions, org_role, org_id, status, is_free_user)
                   VALUES ('$safeUsername', '$safeEmail', '$hashedPw', '$safePhone', '2', 'editor', 0, 'true', 1)";
 } else {
-    $insertSql = "INSERT INTO Login_user_AWS (username, email, password, Permissions, org_role, org_id, status, is_free_user)
+    $insertSql = "INSERT INTO Login_user_AWS (username, email, password, permissions, org_role, org_id, status, is_free_user)
                   VALUES ('$safeUsername', '$safeEmail', '$hashedPw', '2', 'editor', 0, 'true', 1)";
 }
 

@@ -1,7 +1,8 @@
 <?php
+include_once __DIR__ . '/cors.php';
 header('Content-Type: application/json');
 
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') { 
     http_response_code(204);
     exit;
 }
@@ -22,8 +23,8 @@ function permission_to_level($permissionRaw) {
     return 0;
 }
 
-include('db.php');
-mysqli_select_db($con, $db);
+require_once 'db.pgsql.php';
+
 
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     $id = isset($_GET['id']) ? intval($_GET['id']) : 0;
@@ -31,7 +32,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         respond(400, array('success' => false, 'message' => 'Valid user id is required'));
     }
 
-    $stmt = mysqli_prepare($con, "SELECT id, username, email, phone, Permissions FROM Login_user_AWS WHERE id = ? LIMIT 1");
+    $stmt = mysqli_prepare($con, "SELECT id, username, email, phone, permissions FROM Login_user_AWS WHERE id = ? LIMIT 1");
     mysqli_stmt_bind_param($stmt, 'i', $id);
     mysqli_stmt_execute($stmt);
     $row = null;
@@ -42,18 +43,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
             'username' => $username,
             'email' => $emailDb,
             'phone' => $phoneDb,
-            'Permissions' => $permissionsRaw
         );
+    } else {
+        $stmt = $pdo->prepare('SELECT id, username, email, phone, permissions FROM "Login_user_AWS" WHERE id = :id LIMIT 1');
+        $stmt->execute([':id' => $id]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$row) {
+            respond(404, array('success' => false, 'message' => 'User not found'));
+        }
     }
-    mysqli_stmt_close($stmt);
-
-    if (!$row) {
-        respond(404, array('success' => false, 'message' => 'User not found'));
-    }
-
-    $permissions = permission_to_level(isset($row['Permissions']) ? $row['Permissions'] : '');
+    $permissions = permission_to_level(isset($row['permissions']) ? $row['permissions'] : '');
     $role = $permissions >= 3 ? 'admin' : 'user';
-
     respond(200, array(
         'success' => true,
         'data' => array(
@@ -64,7 +64,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
             'role' => $role,
             'permissionLevel' => $permissions,
             'createdAt' => date('c')
-        )
+        ),
+        'message' => 'Profile updated successfully'
     ));
 }
 
@@ -80,7 +81,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' || $_SERVER['REQUEST_METHOD'] === 'PUT
         respond(400, array('success' => false, 'message' => 'Valid user id is required'));
     }
 
-    $stmtCurrent = mysqli_prepare($con, "SELECT username, email, phone, Permissions FROM Login_user_AWS WHERE id = ? LIMIT 1");
+    $stmtCurrent = mysqli_prepare($con, "SELECT username, email, phone, permissions FROM Login_user_AWS WHERE id = ? LIMIT 1");
     mysqli_stmt_bind_param($stmtCurrent, 'i', $id);
     mysqli_stmt_execute($stmtCurrent);
     $currentRow = null;
@@ -90,17 +91,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' || $_SERVER['REQUEST_METHOD'] === 'PUT
             'username' => $currentUsername,
             'email' => $currentEmail,
             'phone' => $currentPhone,
-            'Permissions' => $permissionsRaw,
+            'permissions' => $permissionsRaw
         );
+    } else {
+        $stmtCurrent = $pdo->prepare('SELECT username, email, phone, permissions FROM "Login_user_AWS" WHERE id = :id LIMIT 1');
+        $stmtCurrent->execute([':id' => $id]);
+        $currentRow = $stmtCurrent->fetch(PDO::FETCH_ASSOC);
+        if (!$currentRow) {
+            respond(404, array('success' => false, 'message' => 'User not found'));
+        }
     }
-    mysqli_stmt_close($stmtCurrent);
-
-    if (!$currentRow) {
-        respond(404, array('success' => false, 'message' => 'User not found'));
-    }
-
-    $name = isset($input['name']) ? trim($input['name']) : trim($currentRow['username']);
-    $email = isset($input['email']) ? trim($input['email']) : trim($currentRow['email']);
     $phone = isset($input['phone']) ? trim($input['phone']) : trim($currentRow['phone']);
     $password = isset($input['password']) ? trim($input['password']) : '';
 
@@ -112,14 +112,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' || $_SERVER['REQUEST_METHOD'] === 'PUT
         $stmt = mysqli_prepare($con, "UPDATE Login_user_AWS SET username = ?, email = ?, phone = ?, password = MD5(?) WHERE id = ?");
         mysqli_stmt_bind_param($stmt, 'ssssi', $name, $email, $phone, $password, $id);
     } else {
-        $stmt = mysqli_prepare($con, "UPDATE Login_user_AWS SET username = ?, email = ?, phone = ? WHERE id = ?");
-        mysqli_stmt_bind_param($stmt, 'sssi', $name, $email, $phone, $id);
+        $stmt = $pdo->prepare('UPDATE "Login_user_AWS" SET username = :name, email = :email, phone = :phone, password = MD5(:password) WHERE id = :id');
+        $stmt->execute([':name' => $name, ':email' => $email, ':phone' => $phone, ':password' => $password, ':id' => $id]);
     }
-    mysqli_stmt_execute($stmt);
-    mysqli_stmt_close($stmt);
+    $stmt = $pdo->prepare('UPDATE "Login_user_AWS" SET username = :name, email = :email, phone = :phone WHERE id = :id');
+    $stmt->execute([':name' => $name, ':email' => $email, ':phone' => $phone, ':id' => $id]);
 
-    $permissions = permission_to_level(isset($currentRow['Permissions']) ? $currentRow['Permissions'] : '');
-
+    $permissions = permission_to_level(isset($currentRow['permissions']) ? $currentRow['permissions'] : '');
     $role = $permissions >= 3 ? 'admin' : 'user';
 
     respond(200, array(

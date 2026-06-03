@@ -1,13 +1,7 @@
-<?php
-header('Content-Type: application/json');
-header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Methods: POST, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type, Authorization');
 
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
-    http_response_code(204);
-    exit;
-}
+<?php
+include_once __DIR__ . '/cors.php';
+header('Content-Type: application/json');
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     http_response_code(405);
@@ -15,32 +9,26 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     exit;
 }
 
-include('db.php');
-mysqli_select_db($con, $db);
 
-function get_authenticated_user_update($con) {
+require_once 'db.pgsql.php';
+
+function get_authenticated_user_update($pdo) {
     $authHeader = isset($_SERVER['HTTP_AUTHORIZATION']) ? $_SERVER['HTTP_AUTHORIZATION'] : '';
     if (strpos($authHeader, 'Bearer ') !== 0) return null;
     $token = substr($authHeader, 7);
-    $stmt = mysqli_prepare($con,
-        "SELECT id, org_id, Permissions FROM Login_user_AWS
-         WHERE auth_token = ? AND status = 'true' LIMIT 1");
-    if (!$stmt) return null;
-    mysqli_stmt_bind_param($stmt, 's', $token);
-    mysqli_stmt_execute($stmt);
-    $userId = $orgId = $permissions = null;
-    mysqli_stmt_bind_result($stmt, $userId, $orgId, $permissions);
-    $found = mysqli_stmt_fetch($stmt);
-    mysqli_stmt_close($stmt);
-    if (!$found || !$userId) return null;
+    $sql = 'SELECT id, org_id, permissions FROM "Login_user_AWS" WHERE auth_token = :token AND status = :status LIMIT 1';
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute([':token' => $token, ':status' => 'true']);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$row) return null;
     return [
-        'id' => intval($userId),
-        'org_id' => intval($orgId),
-        'permission_level' => intval($permissions),
+        'id' => intval($row['id']),
+        'org_id' => intval($row['org_id']),
+        'permission_level' => intval($row['permissions']),
     ];
 }
 
-$user = get_authenticated_user_update($con);
+$user = get_authenticated_user_update($pdo);
 if (!$user) {
     http_response_code(401);
     echo json_encode(['success' => false, 'message' => 'Unauthorized']);
@@ -112,56 +100,39 @@ if ($type === 'masjid') {
 
     $allowed = ['Name', 'H_No', 'Apt_No', 'St_Name', 'City', 'State', 'Zip', 'Coordinates'];
     $setClauses = [];
-    $setTypes   = '';
     $setValues  = [];
-
+    $altKeys = [
+        'h_no'       => 'houseNo',
+        'apt_no'     => 'aptNo',
+        'st_name'    => 'streetName',
+        'name'       => 'name',
+        'city'       => 'city',
+        'state'      => 'state',
+        'zip'        => 'zip',
+        'coordinates'=> 'coordinates',
+    ];
     foreach ($allowed as $col) {
         $key = strtolower($col);
-        // Accept both camelCase variants and raw column names
-        $altKeys = [
-            'h_no'       => 'houseNo',
-            'apt_no'     => 'aptNo',
-            'st_name'    => 'streetName',
-            'name'       => 'name',
-            'city'       => 'city',
-            'state'      => 'state',
-            'zip'        => 'zip',
-            'coordinates'=> 'coordinates',
-        ];
         $frontendKey = isset($altKeys[$key]) ? $altKeys[$key] : $key;
-
         if (array_key_exists($frontendKey, $body)) {
             $val = $body[$frontendKey] !== null ? trim((string)$body[$frontendKey]) : '';
-            $setClauses[] = "`$col` = ?";
-            $setTypes    .= 's';
-            $setValues[]  = $val;
+            $setClauses[] = '"' . $col . '" = :' . $col;
+            $setValues[':' . $col] = $val;
         }
     }
-
     if (empty($setClauses)) {
         echo json_encode(['success' => true, 'message' => 'Nothing to update']);
         exit;
     }
-
-    $setValues[] = $id;
-    $setTypes   .= 'i';
-    $sql = "UPDATE Masjids_AWS SET " . implode(', ', $setClauses) . " WHERE ID = ?";
-    $stmt = mysqli_prepare($con, $sql);
-    if (!$stmt) {
-        http_response_code(500);
-        echo json_encode(['success' => false, 'message' => 'DB prepare error: ' . mysqli_error($con)]);
-        exit;
-    }
-    mysqli_stmt_bind_param($stmt, $setTypes, ...$setValues);
-    $ok = mysqli_stmt_execute($stmt);
-    mysqli_stmt_close($stmt);
-
+    $setValues[':id'] = $id;
+    $sql = 'UPDATE "Masjids_AWS" SET ' . implode(', ', $setClauses) . ' WHERE "ID" = :id';
+    $stmt = $pdo->prepare($sql);
+    $ok = $stmt->execute($setValues);
     if (!$ok) {
         http_response_code(500);
         echo json_encode(['success' => false, 'message' => 'Update failed']);
         exit;
     }
-
     echo json_encode(['success' => true, 'message' => 'Masjid updated']);
     exit;
 }
@@ -216,47 +187,30 @@ if ($type === 'address') {
         'comments'  => 'comments',
         'coordinates'=> 'coordinates',
     ];
-
     $setClauses = [];
-    $setTypes   = '';
     $setValues  = [];
-
     foreach ($allowed as $col) {
         $key = strtolower($col);
         $frontendKey = isset($altKeys[$key]) ? $altKeys[$key] : $key;
-
         if (array_key_exists($frontendKey, $body)) {
             $val = $body[$frontendKey] !== null ? trim((string)$body[$frontendKey]) : '';
-            $setClauses[] = "`$col` = ?";
-            $setTypes    .= 's';
-            $setValues[]  = $val;
+            $setClauses[] = '"' . $col . '" = :' . $col;
+            $setValues[':' . $col] = $val;
         }
     }
-
     if (empty($setClauses)) {
         echo json_encode(['success' => true, 'message' => 'Nothing to update']);
         exit;
     }
-
-    $setValues[] = $id;
-    $setTypes   .= 'i';
-    $sql = "UPDATE Addresses_AWS SET " . implode(', ', $setClauses) . " WHERE ID = ?";
-    $stmt = mysqli_prepare($con, $sql);
-    if (!$stmt) {
-        http_response_code(500);
-        echo json_encode(['success' => false, 'message' => 'DB prepare error: ' . mysqli_error($con)]);
-        exit;
-    }
-    mysqli_stmt_bind_param($stmt, $setTypes, ...$setValues);
-    $ok = mysqli_stmt_execute($stmt);
-    mysqli_stmt_close($stmt);
-
+    $setValues[':id'] = $id;
+    $sql = 'UPDATE "Addresses_AWS" SET ' . implode(', ', $setClauses) . ' WHERE "ID" = :id';
+    $stmt = $pdo->prepare($sql);
+    $ok = $stmt->execute($setValues);
     if (!$ok) {
         http_response_code(500);
         echo json_encode(['success' => false, 'message' => 'Update failed']);
         exit;
     }
-
     echo json_encode(['success' => true, 'message' => 'Address updated']);
     exit;
 }

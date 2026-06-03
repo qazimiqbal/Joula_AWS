@@ -5,6 +5,8 @@ import {
   CardHeader,
   CardContent,
   Typography,
+  Alert,
+  LinearProgress,
   Paper,
   Table,
   TableBody,
@@ -31,14 +33,37 @@ import { useAuth } from '@/context/AuthContext';
 
 const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
 
-const hasValidCoordinates = (address: PendingGeocodeRecord): boolean =>
-  typeof address.latitude === 'number' && typeof address.longitude === 'number';
+const parseCoordinates = (address: PendingGeocodeRecord): { lat: number; lng: number } | null => {
+  const latRaw = (address as unknown as { latitude?: number | string }).latitude;
+  const lngRaw = (address as unknown as { longitude?: number | string }).longitude;
+  const latNum = typeof latRaw === 'number' ? latRaw : Number(String(latRaw ?? '').trim());
+  const lngNum = typeof lngRaw === 'number' ? lngRaw : Number(String(lngRaw ?? '').trim());
+
+  if (Number.isFinite(latNum) && Number.isFinite(lngNum)) {
+    return { lat: latNum, lng: lngNum };
+  }
+
+  const raw = (address.coordinates || '').trim();
+  if (!raw) return null;
+
+  const parts = raw.split(',');
+  if (parts.length !== 2) return null;
+
+  const lat = Number(parts[0].trim());
+  const lng = Number(parts[1].trim());
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+
+  return { lat, lng };
+};
+
+const hasValidCoordinates = (address: PendingGeocodeRecord): boolean => parseCoordinates(address) !== null;
 
 const PendingAddresses: React.FC = () => {
   const { user } = useAuth();
   const { isLoaded } = useJsApiLoader({ googleMapsApiKey: GOOGLE_MAPS_API_KEY });
   const [pendingAddresses, setPendingAddresses] = useState<PendingGeocodeRecord[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
   const [mapOpen, setMapOpen] = useState(false);
   const [selectedAddress, setSelectedAddress] = useState<PendingGeocodeRecord | null>(null);
@@ -65,8 +90,13 @@ const PendingAddresses: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSuperAdmin, user?.id]);
 
-  const fetchPendingAddresses = async () => {
-    setLoading(true);
+  const fetchPendingAddresses = async (options?: { background?: boolean }) => {
+    const background = Boolean(options?.background);
+    if (background) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
     setError('');
     try {
       if (!user?.id) {
@@ -79,7 +109,11 @@ const PendingAddresses: React.FC = () => {
     } catch {
       setError('Failed to load pending addresses');
     } finally {
-      setLoading(false);
+      if (background) {
+        setRefreshing(false);
+      } else {
+        setLoading(false);
+      }
     }
   };
 
@@ -101,7 +135,7 @@ const PendingAddresses: React.FC = () => {
     setError('');
     try {
       await apiService.approveAllAddresses();
-      await fetchPendingAddresses();
+      await fetchPendingAddresses({ background: true });
     } catch {
       setError('Failed to approve all pending addresses');
     } finally {
@@ -148,7 +182,7 @@ const PendingAddresses: React.FC = () => {
         verified: editForm.verified === 'Y' ? 'Y' : 'N',
         coordinates: editForm.coordinates || '',
       });
-      await fetchPendingAddresses();
+      await fetchPendingAddresses({ background: true });
       setEditOpen(false);
       setEditForm(null);
     } catch {
@@ -175,8 +209,12 @@ const PendingAddresses: React.FC = () => {
   };
 
   const handleViewMap = (address: PendingGeocodeRecord) => {
-    setSelectedAddress(address);
-    setMapOpen(true);
+    const coords = parseCoordinates(address);
+    if (!coords) {
+      setError('No coordinates available for this address.');
+      return;
+    }
+    navigate(`/map?reviewLat=${coords.lat}&reviewLng=${coords.lng}&reviewId=${address.id}&reviewName=${encodeURIComponent(address.name)}&reviewType=address`);
   };
 
   const handleCloseMap = () => {
@@ -185,7 +223,8 @@ const PendingAddresses: React.FC = () => {
   };
 
   if (mapOpen && selectedAddress) {
-    const hasCoords = typeof selectedAddress.latitude === 'number' && typeof selectedAddress.longitude === 'number';
+    const resolvedCoords = parseCoordinates(selectedAddress);
+    const hasCoords = resolvedCoords !== null;
     return (
       <Box sx={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 1300, display: 'flex', flexDirection: 'column' }}>
         <Box sx={{ display: 'flex', alignItems: 'center', px: 1, py: 0.5, bgcolor: 'black', color: 'white', flexShrink: 0 }}>
@@ -213,11 +252,11 @@ const PendingAddresses: React.FC = () => {
           ) : (
             <GoogleMap
               mapContainerStyle={{ height: '100%', width: '100%' }}
-              center={{ lat: selectedAddress.latitude as number, lng: selectedAddress.longitude as number }}
+              center={{ lat: (resolvedCoords as { lat: number; lng: number }).lat, lng: (resolvedCoords as { lat: number; lng: number }).lng }}
               zoom={15}
               options={{ gestureHandling: 'greedy' }}
             >
-              <Marker position={{ lat: selectedAddress.latitude as number, lng: selectedAddress.longitude as number }} />
+              <Marker position={{ lat: (resolvedCoords as { lat: number; lng: number }).lat, lng: (resolvedCoords as { lat: number; lng: number }).lng }} />
             </GoogleMap>
           )}
         </Box>
@@ -253,7 +292,13 @@ const PendingAddresses: React.FC = () => {
           }
         />
         <CardContent sx={{ flex: 1 }}>
-          {error && <Typography color="error" sx={{ mb: 1 }}>{error}</Typography>}
+          {error && <Alert severity="error" sx={{ mb: 1 }}>{error}</Alert>}
+          {refreshing && (
+            <Box sx={{ mb: 1 }}>
+              <LinearProgress />
+              <Typography variant="caption" color="text.secondary">Refreshing pending addresses...</Typography>
+            </Box>
+          )}
           {loading ? (
             <CircularProgress />
           ) : pendingAddresses.length === 0 ? (
@@ -282,16 +327,16 @@ const PendingAddresses: React.FC = () => {
                         )}
                       </TableCell>
                       <TableCell>
-                        <Button size="small" variant="outlined" sx={{ mr: 1 }} onClick={() => handleViewMap(address)}>
+                        <Button size="small" variant="outlined" sx={{ mr: 1, px: 1, py: 0.25, minWidth: 92, fontSize: '0.72rem', lineHeight: 1.2 }} onClick={() => handleViewMap(address)} disabled={refreshing || approveAllLoading}>
                           View on Map
                         </Button>
                         {canApprove && (
-                          <Button size="small" color="success" variant="contained" sx={{ mr: 1, fontWeight: 700, letterSpacing: 1 }} onClick={() => handleApprove(address.id)} disabled={approveLoading === address.id}>
+                          <Button size="small" color="success" variant="contained" sx={{ mr: 1, px: 1, py: 0.25, minWidth: 84, fontWeight: 700, letterSpacing: 0.5, fontSize: '0.72rem', lineHeight: 1.2 }} onClick={() => handleApprove(address.id)} disabled={approveLoading === address.id || refreshing || approveAllLoading}>
                             {approveLoading === address.id ? <CircularProgress size={18} /> : 'Approve'}
                           </Button>
                         )}
                         {canApprove && (
-                          <Button size="small" variant="contained" color="warning" onClick={() => handleOpenEdit(address)}>
+                          <Button size="small" variant="contained" color="warning" sx={{ px: 1, py: 0.25, minWidth: 72, fontSize: '0.72rem', lineHeight: 1.2 }} onClick={() => handleOpenEdit(address)} disabled={refreshing || approveAllLoading}>
                             Edit
                           </Button>
                         )}

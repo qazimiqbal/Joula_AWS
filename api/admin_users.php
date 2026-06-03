@@ -1,205 +1,222 @@
 <?php
+// Disable error display and log errors to a file to avoid breaking CORS headers
+ini_set('display_errors', 0);
+ini_set('log_errors', 1);
+ini_set('error_log', __DIR__ . '/php-error.log');
+include_once __DIR__ . '/cors.php';
 header('Content-Type: application/json');
-header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Headers: Authorization, Content-Type');
-header('Access-Control-Allow-Methods: GET, OPTIONS');
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') { http_response_code(204); exit; }
+require_once 'db.pgsql.php';
 
-require_once 'db.php';
+// Helper: send JSON response and exit
+if (!function_exists('respond')) {
+    function respond($statusCode, $payload) {
+        http_response_code($statusCode);
+        echo json_encode($payload);
+        exit;
+    }
+}
 
-// Authenticate – super admin only (Permissions = 4)
+// Authenticate – super admin only (permissions = 4)
+
 $authHeader = isset($_SERVER['HTTP_AUTHORIZATION']) ? $_SERVER['HTTP_AUTHORIZATION'] : '';
+// Debug log the received Authorization header and user agent
+file_put_contents(__DIR__ . '/php-error.log', date('c') . " AUTH_HEADER: $authHeader | UA: " . ($_SERVER['HTTP_USER_AGENT'] ?? '') . "\n", FILE_APPEND);
 if (strpos($authHeader, 'Bearer ') !== 0) {
     http_response_code(401);
-    echo json_encode(['success' => false, 'message' => 'Unauthorized']);
+    echo json_encode(['success' => false, 'message' => 'Unauthorized', 'debug' => $authHeader]);
     exit;
 }
 $token = substr($authHeader, 7);
-$authStmt = mysqli_prepare($con,
-    "SELECT id, Permissions FROM Login_user_AWS WHERE auth_token = ? AND status = 'true' LIMIT 1");
-if (!$authStmt) {
-    http_response_code(500);
-    echo json_encode(['success' => false, 'message' => 'DB error']);
-    exit;
+// Use lowercase permissions for PostgreSQL
+$sql = 'SELECT id, permissions FROM "Login_user_AWS" WHERE auth_token = :token AND status = :status LIMIT 1';
+$stmt = $con->prepare($sql);
+$stmt->execute([':token' => $token, ':status' => 'true']);
+$row = $stmt->fetch(PDO::FETCH_ASSOC);
+if (!$row || intval($row['permissions']) < 4) {
+    respond(403, ['success' => false, 'message' => 'Forbidden – super admin only', 'debug' => $token]);
 }
-mysqli_stmt_bind_param($authStmt, 's', $token);
-mysqli_stmt_execute($authStmt);
-$authUserId = null; $authPerms = null;
-mysqli_stmt_bind_result($authStmt, $authUserId, $authPerms);
-mysqli_stmt_fetch($authStmt);
-mysqli_stmt_close($authStmt);
-
-if (!$authUserId || intval($authPerms) < 4) {
-    http_response_code(403);
-    echo json_encode(['success' => false, 'message' => 'Forbidden – super admin only']);
-    exit;
-}
+$authUserId = intval($row['id']);
 
 $action = isset($_GET['action']) ? $_GET['action'] : 'list';
 
 if ($action === 'list') {
     // List all users on the platform
-    $hasMaxEditors = false;
-    $chk = mysqli_query($con, "SHOW COLUMNS FROM organizations LIKE 'max_editors'");
-    if ($chk) { $hasMaxEditors = mysqli_num_rows($chk) > 0; mysqli_free_result($chk); }
-    $hasFreeAccount = false;
-    $chk2 = mysqli_query($con, "SHOW COLUMNS FROM organizations LIKE 'free_account'");
-    if ($chk2) { $hasFreeAccount = mysqli_num_rows($chk2) > 0; mysqli_free_result($chk2); }
-
-    $orgExtras = '';
-    if ($hasMaxEditors) $orgExtras .= ', COALESCE(o.max_editors, 1) AS max_editors, COALESCE(o.max_viewers, 3) AS max_viewers';
-    if ($hasFreeAccount) $orgExtras .= ', COALESCE(o.free_account, 0) AS free_account';
-
-    $sql = "SELECT u.id, u.username, u.email,
-                   COALESCE(u.phone, '') AS phone,
-                   u.org_id,
-                   COALESCE(o.name, '') AS org_name,
-                   u.Permissions,
-                   COALESCE(u.org_role, '') AS org_role,
-                   u.status,
-                   (SELECT COUNT(*) FROM Masjids_AWS m WHERE m.Created_by = u.id) AS masjid_count,
-                   (SELECT COUNT(*) FROM Login_user_AWS eu
-                    WHERE eu.org_id = u.org_id
-                      AND eu.org_role IN ('editor','viewer')
-                      AND eu.id != u.id) AS team_count
-                   {$orgExtras}
-            FROM Login_user_AWS u
-            LEFT JOIN organizations o ON o.id = u.org_id
-            WHERE u.status = 'true'
-            ORDER BY u.Permissions DESC, u.id ASC";
-
-    $result = mysqli_query($con, $sql);
-    if (!$result) {
-        http_response_code(500);
-        echo json_encode(['success' => false, 'message' => mysqli_error($con)]);
-        exit;
+        $sql = "SELECT u.id, u.username, u.email,
+                                     COALESCE(u.phone, '') AS phone,
+                                     u.org_id,
+                                     COALESCE(o.name, '') AS org_name,
+                                     u.permissions,
+                                     COALESCE(u.org_role, 'viewer') AS org_role,
+                                     u.status,
+                                     (SELECT COUNT(*) FROM \"Masjids_AWS\" m WHERE m.\"Created_by\" = u.id) AS masjid_count,
+                                     (SELECT COUNT(*) FROM \"Login_user_AWS\" eu
+                                        WHERE eu.org_id = u.org_id
+                                            AND eu.org_role IN ('editor','viewer')
+                                            AND eu.id != u.id) AS team_count,
+                                     COALESCE(o.max_editors, 1) AS max_editors,
+                                     COALESCE(o.max_viewers, 3) AS max_viewers,
+                                     COALESCE(o.free_account, 0) AS free_account
+                        FROM \"Login_user_AWS\" u
+                        LEFT JOIN LATERAL (
+                            SELECT name, max_editors, max_viewers, free_account
+                            FROM organizations o1
+                            WHERE o1.id = u.org_id
+                            ORDER BY o1.created_at DESC NULLS LAST
+                            LIMIT 1
+                        ) o ON true
+                        WHERE u.status = 'true'
+                        ORDER BY u.permissions DESC, u.id ASC";
+    try {
+        $stmt = $con->prepare($sql);
+        $stmt->execute();
+        $users = [];
+        while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+            $users[] = [
+                'id'          => intval($row['id']),
+                'username'    => $row['username'],
+                'email'       => $row['email'],
+                'phone'       => $row['phone'],
+                'orgId'       => intval($row['org_id']),
+                'orgName'     => $row['org_name'],
+                'permissions' => intval($row['permissions']),
+                'orgRole'     => $row['org_role'],
+                'status'      => $row['status'],
+                'masjidCount' => intval($row['masjid_count']),
+                'teamCount'   => intval($row['team_count']),
+                'maxEditors'  => isset($row['max_editors'])  ? intval($row['max_editors'])  : 1,
+                'maxViewers'  => isset($row['max_viewers'])  ? intval($row['max_viewers'])  : 3,
+                'freeAccount' => isset($row['free_account']) ? (bool)$row['free_account']  : false,
+            ];
+        }
+        if (empty($users)) {
+            respond(200, ['success' => false, 'message' => 'No users found', 'debug' => 'Query returned 0 rows']);
+        } else {
+            respond(200, ['success' => true, 'data' => $users]);
+        }
+    } catch (Exception $e) {
+        // Log the error to php-error.log for debugging
+        file_put_contents(__DIR__ . '/php-error.log', date('c') . " PDOException in list: " . $e->getMessage() . "\nSQL: $sql\n", FILE_APPEND);
+        respond(500, [
+            'success' => false,
+            'message' => 'DB error',
+            'error' => $e->getMessage(),
+            'sql' => $sql
+        ]);
     }
-
-    $users = [];
-    while ($row = mysqli_fetch_assoc($result)) {
-        $users[] = [
-            'id'          => intval($row['id']),
-            'username'    => $row['username'],
-            'email'       => $row['email'],
-            'phone'       => $row['phone'],
-            'orgId'       => intval($row['org_id']),
-            'orgName'     => $row['org_name'],
-            'permissions' => intval($row['Permissions']),
-            'orgRole'     => $row['org_role'],
-            'status'      => $row['status'],
-            'masjidCount' => intval($row['masjid_count']),
-            'teamCount'   => intval($row['team_count']),
-            'maxEditors'  => isset($row['max_editors'])  ? intval($row['max_editors'])  : 1,
-            'maxViewers'  => isset($row['max_viewers'])  ? intval($row['max_viewers'])  : 3,
-            'freeAccount' => isset($row['free_account']) ? (bool)$row['free_account']  : false,
-        ];
-    }
-    mysqli_free_result($result);
-
-    echo json_encode(['success' => true, 'data' => $users]);
-    exit;
 }
 
 if ($action === 'masjids') {
     $userId = isset($_GET['userId']) ? intval($_GET['userId']) : 0;
     if ($userId <= 0) {
-        http_response_code(400);
-        echo json_encode(['success' => false, 'message' => 'userId required']);
-        exit;
+        respond(400, ['success' => false, 'message' => 'userId required']);
     }
 
-    $userIdEsc = intval($userId);
-    $sql = "SELECT ID, Name, H_No, Apt_No, St_Name, City, State, Zip, `Clear`, Coordinates
-            FROM Masjids_AWS
-            WHERE Created_by = {$userIdEsc}
-            ORDER BY ID DESC";
-    $res = mysqli_query($con, $sql);
-    if (!$res) {
-        http_response_code(500);
-        echo json_encode(['success' => false, 'message' => mysqli_error($con)]);
-        exit;
+    // Get org_id and org_role for the user
+    $orgId = null;
+    $orgRole = null;
+    try {
+        $orgStmt = $con->prepare('SELECT org_id, org_role FROM "Login_user_AWS" WHERE id = :userId LIMIT 1');
+        $orgStmt->execute([':userId' => $userId]);
+        $orgRow = $orgStmt->fetch(PDO::FETCH_ASSOC);
+        if ($orgRow && isset($orgRow['org_id'])) {
+            $orgId = $orgRow['org_id'];
+            $orgRole = $orgRow['org_role'];
+        }
+    } catch (Exception $e) {
+        file_put_contents(__DIR__ . '/php-error.log', date('c') . " PDOException in masjids-orgId: " . $e->getMessage() . "\n", FILE_APPEND);
+        respond(500, ['success' => false, 'message' => 'DB error', 'error' => $e->getMessage()]);
     }
-    $masjids = [];
-    while ($row = mysqli_fetch_assoc($res)) {
-        $masjids[] = [
-            'id'         => intval($row['ID']),
-            'name'       => $row['Name'],
-            'houseNo'    => $row['H_No'],
-            'aptNo'      => $row['Apt_No'],
-            'streetName' => $row['St_Name'],
-            'city'       => $row['City'],
-            'state'      => $row['State'],
-            'zip'        => $row['Zip'],
-            'approved'   => intval($row['Clear']) === 1,
-            'coordinates'=> $row['Coordinates'],
-        ];
-    }
-    mysqli_free_result($res);
 
-    echo json_encode(['success' => true, 'data' => $masjids]);
-    exit;
+    if ($orgId && ($orgRole === 'org_admin' || $orgRole === 'admin')) {
+        // Org admin: get all masjids created by anyone in the org
+        $sql = 'SELECT m."ID", m."Name", m."H_No", m."Apt_No", m."St_Name", m."City", m."State", m."Zip", m."Clear", m."Coordinates" FROM "Masjids_AWS" m JOIN "Login_user_AWS" u ON m."Created_by" = u.id WHERE u.org_id = :orgId ORDER BY m."ID" DESC';
+        $params = [':orgId' => $orgId];
+    } else {
+        // Regular user: only their own masjids
+        $sql = 'SELECT "ID", "Name", "H_No", "Apt_No", "St_Name", "City", "State", "Zip", "Clear", "Coordinates" FROM "Masjids_AWS" WHERE "Created_by" = :userId ORDER BY "ID" DESC';
+        $params = [':userId' => $userId];
+    }
+    try {
+        $stmt = $con->prepare($sql);
+        $stmt->execute($params);
+        $masjids = [];
+        while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+            $masjids[] = [
+                'id'         => intval($row['ID']),
+                'name'       => $row['Name'],
+                'houseNo'    => $row['H_No'],
+                'aptNo'      => $row['Apt_No'],
+                'streetName' => $row['St_Name'],
+                'city'       => $row['City'],
+                'state'      => $row['State'],
+                'zip'        => $row['Zip'],
+                'approved'   => intval($row['Clear']) === 1,
+                'coordinates'=> $row['Coordinates'],
+            ];
+        }
+        respond(200, ['success' => true, 'data' => $masjids]);
+    } catch (Exception $e) {
+        file_put_contents(__DIR__ . '/php-error.log', date('c') . " PDOException in masjids: " . $e->getMessage() . "\nSQL: $sql\n", FILE_APPEND);
+        respond(500, ['success' => false, 'message' => 'DB error', 'error' => $e->getMessage(), 'sql' => $sql]);
+    }
 }
 
 if ($action === 'team') {
     $userId = isset($_GET['userId']) ? intval($_GET['userId']) : 0;
     if ($userId <= 0) {
-        http_response_code(400);
-        echo json_encode(['success' => false, 'message' => 'userId required']);
-        exit;
+        respond(400, ['success' => false, 'message' => 'userId required']);
     }
 
     // Get org_id for the user
-    $orgStmt = mysqli_prepare($con, "SELECT org_id FROM Login_user_AWS WHERE id = ? LIMIT 1");
-    if (!$orgStmt) {
-        http_response_code(500);
-        echo json_encode(['success' => false, 'message' => mysqli_error($con)]);
-        exit;
-    }
-    mysqli_stmt_bind_param($orgStmt, 'i', $userId);
-    mysqli_stmt_execute($orgStmt);
     $orgId = null;
-    mysqli_stmt_bind_result($orgStmt, $orgId);
-    mysqli_stmt_fetch($orgStmt);
-    mysqli_stmt_close($orgStmt);
+    try {
+        $orgStmt = $con->prepare('SELECT org_id FROM "Login_user_AWS" WHERE id = :userId LIMIT 1');
+        $orgStmt->execute([':userId' => $userId]);
+        $orgRow = $orgStmt->fetch(PDO::FETCH_ASSOC);
+        if ($orgRow && isset($orgRow['org_id'])) {
+            $orgId = $orgRow['org_id'];
+        }
+    } catch (Exception $e) {
+        file_put_contents(__DIR__ . '/php-error.log', date('c') . " PDOException in team-orgId: " . $e->getMessage() . "\n", FILE_APPEND);
+        respond(500, ['success' => false, 'message' => 'DB error', 'error' => $e->getMessage()]);
+    }
 
     if (!$orgId) {
-        echo json_encode(['success' => true, 'data' => []]);
-        exit;
+        respond(200, ['success' => true, 'data' => []]);
     }
 
+    // Check if phone column exists
     $hasPhone = false;
-    $phoneChk = mysqli_query($con, "SHOW COLUMNS FROM `Login_user_AWS` LIKE 'phone'");
-    if ($phoneChk && mysqli_num_rows($phoneChk) > 0) { $hasPhone = true; }
-    if ($phoneChk) mysqli_free_result($phoneChk);
+    try {
+        $phoneChk = $con->query("SELECT column_name FROM information_schema.columns WHERE table_name='Login_user_AWS' AND column_name='phone'");
+        if ($phoneChk && $phoneChk->fetch(PDO::FETCH_ASSOC)) {
+            $hasPhone = true;
+        }
+    } catch (Exception $e) {
+        // If this fails, just default to no phone
+    }
     $phoneSelect = $hasPhone ? 'phone' : "'' AS phone";
 
-    $orgIdEsc = intval($orgId);
-    $userIdEsc2 = intval($userId);
-    $sql = "SELECT id, username, email, {$phoneSelect}, org_role, status
-            FROM Login_user_AWS
-            WHERE org_id = {$orgIdEsc} AND id != {$userIdEsc2} AND org_role IN ('editor','viewer')
-            ORDER BY org_role ASC, id ASC";
-    $res = mysqli_query($con, $sql);
-    if (!$res) {
-        http_response_code(500);
-        echo json_encode(['success' => false, 'message' => mysqli_error($con)]);
-        exit;
+    $sql = 'SELECT id, username, email, ' . $phoneSelect . ", org_role, status FROM \"Login_user_AWS\" WHERE org_id = :orgId AND id != :userId AND org_role IN ('editor','viewer') ORDER BY org_role ASC, id ASC";
+    try {
+        $stmt = $con->prepare($sql);
+        $stmt->execute([':orgId' => $orgId, ':userId' => $userId]);
+        $team = [];
+        while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+            $team[] = [
+                'id'      => intval($row['id']),
+                'username'=> $row['username'],
+                'email'   => $row['email'],
+                'phone'   => $row['phone'],
+                'orgRole' => $row['org_role'],
+                'status'  => $row['status'],
+            ];
+        }
+        respond(200, ['success' => true, 'data' => $team]);
+    } catch (Exception $e) {
+        file_put_contents(__DIR__ . '/php-error.log', date('c') . " PDOException in team: " . $e->getMessage() . "\nSQL: $sql\n", FILE_APPEND);
+        respond(500, ['success' => false, 'message' => 'DB error', 'error' => $e->getMessage(), 'sql' => $sql]);
     }
-    $team = [];
-    while ($row = mysqli_fetch_assoc($res)) {
-        $team[] = [
-            'id'      => intval($row['id']),
-            'username'=> $row['username'],
-            'email'   => $row['email'],
-            'phone'   => $row['phone'],
-            'orgRole' => $row['org_role'],
-            'status'  => $row['status'],
-        ];
-    }
-    mysqli_free_result($res);
-
-    echo json_encode(['success' => true, 'data' => $team]);
-    exit;
 }
 
 if ($action === 'update_user') {
@@ -210,38 +227,35 @@ if ($action === 'update_user') {
     $password = isset($data['password']) ? trim($data['password']) : '';
 
     if ($targetId <= 0 || $email === '') {
-        http_response_code(400);
-        echo json_encode(['success' => false, 'message' => 'userId and email are required']);
+        respond(400, ['success' => false, 'message' => 'userId and email are required']);
+    }
+
+    try {
+        if ($password !== '') {
+            $hash = password_hash($password, PASSWORD_DEFAULT);
+            $sql = "UPDATE \"Login_user_AWS\" SET email = :email, phone = :phone, password = :password WHERE id = :id";
+            $stmt = $con->prepare($sql);
+            $stmt->execute([
+                ':email' => $email,
+                ':phone' => $phone,
+                ':password' => $hash,
+                ':id' => $targetId
+            ]);
+        } else {
+            $sql = "UPDATE \"Login_user_AWS\" SET email = :email, phone = :phone WHERE id = :id";
+            $stmt = $con->prepare($sql);
+            $stmt->execute([
+                ':email' => $email,
+                ':phone' => $phone,
+                ':id' => $targetId
+            ]);
+        }
+        $affected = $stmt->rowCount();
+        echo json_encode(['success' => true, 'affected' => $affected]);
         exit;
+    } catch (Exception $e) {
+        respond(500, ['success' => false, 'message' => $e->getMessage()]);
     }
-
-    if ($password !== '') {
-        $hash = password_hash($password, PASSWORD_DEFAULT);
-        $stmt = mysqli_prepare($con,
-            "UPDATE Login_user_AWS SET email = ?, phone = ?, password = ? WHERE id = ? LIMIT 1");
-        if (!$stmt) {
-            http_response_code(500);
-            echo json_encode(['success' => false, 'message' => mysqli_error($con)]);
-            exit;
-        }
-        mysqli_stmt_bind_param($stmt, 'sssi', $email, $phone, $hash, $targetId);
-    } else {
-        $stmt = mysqli_prepare($con,
-            "UPDATE Login_user_AWS SET email = ?, phone = ? WHERE id = ? LIMIT 1");
-        if (!$stmt) {
-            http_response_code(500);
-            echo json_encode(['success' => false, 'message' => mysqli_error($con)]);
-            exit;
-        }
-        mysqli_stmt_bind_param($stmt, 'ssi', $email, $phone, $targetId);
-    }
-
-    mysqli_stmt_execute($stmt);
-    $affected = mysqli_stmt_affected_rows($stmt);
-    mysqli_stmt_close($stmt);
-
-    echo json_encode(['success' => true, 'affected' => $affected]);
-    exit;
 }
 
 if ($action === 'update_org_limits') {
@@ -257,40 +271,39 @@ if ($action === 'update_org_limits') {
         exit;
     }
 
-    // Ensure free_account column exists
-    $hasFreeCol = false;
-    $chkFree = mysqli_query($con, "SHOW COLUMNS FROM organizations LIKE 'free_account'");
-    if ($chkFree) { $hasFreeCol = mysqli_num_rows($chkFree) > 0; mysqli_free_result($chkFree); }
-    if (!$hasFreeCol) {
-        mysqli_query($con, "ALTER TABLE organizations ADD COLUMN free_account TINYINT(1) NOT NULL DEFAULT 0");
+    // Ensure free_account column exists (Postgres version)
+    try {
+        $colCheck = $con->query("SELECT column_name FROM information_schema.columns WHERE table_name='organizations' AND column_name='free_account'");
+        $hasFreeCol = $colCheck->fetch(PDO::FETCH_ASSOC) !== false;
+        if (!$hasFreeCol) {
+            $con->exec("ALTER TABLE \"organizations\" ADD COLUMN free_account INTEGER NOT NULL DEFAULT 0");
+        }
+    } catch (Exception $e) {
+        // Log but do not block
+        file_put_contents(__DIR__ . '/php-error.log', date('c') . " free_account col check/add failed: " . $e->getMessage() . "\n", FILE_APPEND);
     }
 
     $setClauses = [];
-    $types = '';
     $params = [];
-    if ($maxEditors >= 0)  { $setClauses[] = 'max_editors = ?';  $types .= 'i'; $params[] = $maxEditors; }
-    if ($maxViewers >= 0)  { $setClauses[] = 'max_viewers = ?';  $types .= 'i'; $params[] = $maxViewers; }
-    if ($freeAccount >= 0) { $setClauses[] = 'free_account = ?'; $types .= 'i'; $params[] = $freeAccount; }
+    if ($maxEditors >= 0)  { $setClauses[] = 'max_editors = :maxEditors';  $params[':maxEditors'] = $maxEditors; }
+    if ($maxViewers >= 0)  { $setClauses[] = 'max_viewers = :maxViewers';  $params[':maxViewers'] = $maxViewers; }
+    if ($freeAccount >= 0) { $setClauses[] = 'free_account = :freeAccount'; $params[':freeAccount'] = $freeAccount; }
 
     if (empty($setClauses)) {
         echo json_encode(['success' => true, 'message' => 'Nothing to update']);
         exit;
     }
 
-    $types .= 'i';
-    $params[] = $orgId;
-    $stmt = mysqli_prepare($con, "UPDATE organizations SET " . implode(', ', $setClauses) . " WHERE id = ? LIMIT 1");
-    if (!$stmt) {
-        http_response_code(500);
-        echo json_encode(['success' => false, 'message' => mysqli_error($con)]);
+    $params[':orgId'] = $orgId;
+    $sql = "UPDATE \"organizations\" SET " . implode(', ', $setClauses) . " WHERE id = :orgId";
+    try {
+        $stmt = $con->prepare($sql);
+        $stmt->execute($params);
+        echo json_encode(['success' => true]);
         exit;
+    } catch (Exception $e) {
+        respond(500, ['success' => false, 'message' => $e->getMessage()]);
     }
-    mysqli_stmt_bind_param($stmt, $types, ...$params);
-    mysqli_stmt_execute($stmt);
-    mysqli_stmt_close($stmt);
-
-    echo json_encode(['success' => true]);
-    exit;
 }
 
 http_response_code(400);

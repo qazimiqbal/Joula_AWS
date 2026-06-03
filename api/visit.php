@@ -9,8 +9,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     exit;
 }
 
-include('db.php');
-mysqli_select_db($con, $db);
+require_once 'db.pgsql.php';
 
 // ── GET: fetch existing Comments for an address ────────
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
@@ -21,28 +20,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         exit;
     }
 
-    $stmt = mysqli_prepare($con, 'SELECT Comments FROM Addresses_AWS WHERE ID = ?');
-    if (!$stmt) {
-        http_response_code(500);
-        echo json_encode(['success' => false, 'message' => 'Query prepare failed']);
-        exit;
-    }
-    mysqli_stmt_bind_param($stmt, 'i', $id);
-    mysqli_stmt_execute($stmt);
-    mysqli_stmt_bind_result($stmt, $comments);
-
-    if (mysqli_stmt_fetch($stmt)) {
-        mysqli_stmt_close($stmt);
+    $sql = 'SELECT "Comments" FROM "Addresses_AWS" WHERE "ID" = :id';
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute([':id' => $id]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($row) {
         echo json_encode([
             'success' => true,
             'data'    => [
-                'comments'   => $comments  ?? '',
+                'comments'   => $row['Comments'] ?? '',
                 'ethinicity' => 'Others',
                 'potential'  => 'No',
             ],
         ]);
     } else {
-        mysqli_stmt_close($stmt);
         http_response_code(404);
         echo json_encode(['success' => false, 'message' => 'Record not found']);
     }
@@ -88,43 +79,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     // Build parameterised UPDATE
     // Base columns always updated
-    $setCols  = 'Last_Visit=?, Comments=?';
-    $types    = 'ss';
-    $params   = [$today, $comments];
+    $setCols = [];
+    $params = [];
+    $setCols[] = '"Last_Visit" = :lastVisit';
+    $params[':lastVisit'] = $today;
+    $setCols[] = '"Comments" = :comments';
+    $params[':comments'] = $comments;
     if ($newStatus !== null) {
-        $setCols .= ', Status=?';
-        $types   .= 's';
-        $params[] = $newStatus;
+        $setCols[] = '"Status" = :status';
+        $params[':status'] = $newStatus;
     }
     if ($newVerified !== null) {
-        $setCols .= ', Verified=?';
-        $types   .= 's';
-        $params[] = $newVerified;
+        $setCols[] = '"Verified" = :verified';
+        $params[':verified'] = $newVerified;
     }
-
-    $types   .= 'i';
-    $params[] = $id;
-
-    $stmt = mysqli_prepare($con, "UPDATE Addresses_AWS SET $setCols WHERE ID=?");
-    if (!$stmt) {
-        http_response_code(500);
-        echo json_encode(['success' => false, 'message' => 'Query prepare failed']);
-        exit;
-    }
-
-    // Bind params dynamically
-    $bindArgs = array_merge([$stmt, $types], $params);
-    $refs     = [];
-    foreach ($bindArgs as $k => $v) {
-        $refs[$k] = &$bindArgs[$k];
-    }
-    call_user_func_array('mysqli_stmt_bind_param', $refs);
-
-    if (mysqli_stmt_execute($stmt)) {
-        mysqli_stmt_close($stmt);
+    $params[':id'] = $id;
+    $sql = 'UPDATE "Addresses_AWS" SET ' . implode(', ', $setCols) . ' WHERE "ID" = :id';
+    $stmt = $pdo->prepare($sql);
+    if ($stmt->execute($params)) {
         echo json_encode(['success' => true, 'message' => 'Record updated successfully']);
     } else {
-        mysqli_stmt_close($stmt);
         http_response_code(500);
         echo json_encode(['success' => false, 'message' => 'Failed to update record']);
     }

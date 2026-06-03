@@ -15,6 +15,7 @@ import {
 } from '@mui/material'
 import UploadFileIcon from '@mui/icons-material/UploadFile'
 import DownloadIcon from '@mui/icons-material/Download'
+import { useJsApiLoader } from '@react-google-maps/api'
 import apiService from '@services/api'
 import { useAuth } from '@/context/AuthContext'
 import { Masjid } from '@/types'
@@ -45,15 +46,26 @@ const todayStr = () => new Date().toISOString().split('T')[0]
 
 const AddAddress: React.FC = () => {
   const navigate = useNavigate()
-  const { user, subscription } = useAuth()
-  const permissionLevel = user?.permissionLevel ?? (user?.role === 'admin' ? 3 : 1)
+  const { user, subscription, loading: authLoading } = useAuth()
+  const roleBasedLevel = user?.orgRole === 'org_admin' || user?.orgRole === 'admin'
+    ? 3
+    : user?.orgRole === 'editor'
+      ? 2
+      : user?.orgRole === 'viewer'
+        ? 1
+        : 0
+  const permissionLevel = Math.max(user?.permissionLevel ?? 0, roleBasedLevel, user?.role === 'admin' ? 3 : 1)
   const isSuperAdmin = permissionLevel >= 4
   const canSeeCoordinates = permissionLevel >= 2
   const canGeocode = isSuperAdmin
   const canUseCoordinates = isSuperAdmin
   const canUseCurrentLocation = permissionLevel >= 2
-  const isBlockedBySubscription = !isSuperAdmin && (
-    !subscription ||
+  const googleMapsApiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || ''
+  const { isLoaded: isGoogleMapsLoaded } = useJsApiLoader({
+    id: 'add-address-google-geocoder',
+    googleMapsApiKey,
+  })
+  const isBlockedBySubscription = !isSuperAdmin && !!subscription && (
     subscription.planStatus === 'expired' ||
     subscription.planStatus === 'cancelled' ||
     subscription.planStatus === 'past_due'
@@ -85,6 +97,7 @@ const AddAddress: React.FC = () => {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
+    if (authLoading) return
     if (permissionLevel < 2) {
       navigate('/dashboard', { replace: true })
       return
@@ -92,7 +105,16 @@ const AddAddress: React.FC = () => {
     if (isBlockedBySubscription) {
       navigate('/billing', { replace: true })
     }
-  }, [isBlockedBySubscription, navigate, permissionLevel])
+  }, [authLoading, isBlockedBySubscription, navigate, permissionLevel])
+
+  if (authLoading) {
+    return (
+      <Box sx={{ maxWidth: 900, mx: 'auto', px: 2, py: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1.5 }}>
+        <CircularProgress size={22} />
+        <Typography variant="body2" color="text.secondary">Loading Add Address...</Typography>
+      </Box>
+    )
+  }
 
   const updateField = (field: string, value: string, markAsManualEdit: boolean = true) => {
     setForm((prev) => ({ ...prev, [field]: value }))
@@ -115,27 +137,61 @@ const AddAddress: React.FC = () => {
       .join(', ')
   }, [])
 
-  const geocodeAddress = useCallback(async (f: typeof form) => {
+  const geocodeWithBrowserGoogle = useCallback(async (query: string): Promise<{ lat: number; lng: number } | null> => {
+    if (!isGoogleMapsLoaded || typeof window === 'undefined' || !window.google?.maps?.Geocoder) {
+      return null
+    }
+
+    const geocoder = new window.google.maps.Geocoder()
+    return new Promise((resolve) => {
+      geocoder.geocode({ address: query }, (results, status) => {
+        if (status === 'OK' && results?.[0]?.geometry?.location) {
+          const loc = results[0].geometry.location
+          resolve({ lat: loc.lat(), lng: loc.lng() })
+          return
+        }
+        resolve(null)
+      })
+    })
+  }, [isGoogleMapsLoaded])
+
+  const geocodeAddress = useCallback(async (f: typeof form, options?: { silent?: boolean }) => {
     if (!canUseCoordinates) return
     const query = buildAddressQuery(f)
     // Need at least house number + street + city to geocode meaningfully
     if (!f.houseNo.trim() || !f.streetName.trim() || !f.city.trim()) return
 
+    if (!googleMapsApiKey || !isGoogleMapsLoaded) {
+      if (!options?.silent) {
+        setError('Google geocoder is still loading. Please try again in a moment.')
+      }
+      return
+    }
+
     setGeocoding(true)
     try {
-      const { lat, lng } = await apiService.geocodeAddress(query)
+      const browserGeo = await geocodeWithBrowserGoogle(query)
+      if (!browserGeo) {
+        if (!options?.silent) {
+          setError('Google geocoding could not find this address. Please refine the address and try again.')
+        }
+        return
+      }
+      setError('')
       setForm((prev) => ({
         ...prev,
-        latitude: lat.toFixed(6),
-        longitude: lng.toFixed(6),
+        latitude: browserGeo.lat.toFixed(6),
+        longitude: browserGeo.lng.toFixed(6),
       }))
       setNeedsRegeocode(false)
     } catch {
-      // silent — user can still enter manually
+      if (!options?.silent) {
+        setError('Google geocoding failed. Please try again.')
+      }
     } finally {
       setGeocoding(false)
     }
-  }, [buildAddressQuery, canUseCoordinates])
+  }, [buildAddressQuery, canUseCoordinates, geocodeWithBrowserGoogle, googleMapsApiKey, isGoogleMapsLoaded])
 
   // Auto-geocode with 800ms debounce whenever address fields change
   useEffect(() => {
@@ -145,7 +201,7 @@ const AddAddress: React.FC = () => {
     }
     if (debounceRef.current) clearTimeout(debounceRef.current)
     debounceRef.current = setTimeout(() => {
-      geocodeAddress(form)
+      geocodeAddress(form, { silent: true })
     }, 800)
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current)
@@ -437,10 +493,10 @@ const AddAddress: React.FC = () => {
                   variant="contained"
                   color="secondary"
                   onClick={() => geocodeAddress(form)}
-                  disabled={loading || geocoding || !form.houseNo.trim() || !form.streetName.trim() || !form.city.trim()}
+                  disabled={loading || geocoding || !isGoogleMapsLoaded || !form.houseNo.trim() || !form.streetName.trim() || !form.city.trim()}
                   sx={{ height: '56px' }}
                 >
-                  {geocoding ? 'Geocoding...' : 'Geocode This Address'}
+                  {geocoding ? 'Geocoding...' : (isGoogleMapsLoaded ? 'Geocode This Address' : 'Loading Google Geocoder...')}
                 </Button>
               </Grid>
             )}

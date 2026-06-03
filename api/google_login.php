@@ -1,21 +1,30 @@
 <?php
+include_once __DIR__ . '/cors.php';
+
 ob_start();
-set_error_handler(function($errno, $errstr, $errfile, $errline) {
+set_error_handler(function ($errno, $errstr, $errfile, $errline) {
     ob_end_clean();
     http_response_code(500);
     header('Content-Type: application/json');
-    echo json_encode(['success' => false, 'message' => "PHP error [$errno]: $errstr in $errfile on line $errline"]);
+    echo json_encode([
+        'success' => false,
+        'message' => "PHP error [$errno]: $errstr in $errfile on line $errline",
+    ]);
     exit;
 });
-register_shutdown_function(function() {
+register_shutdown_function(function () {
     $error = error_get_last();
-    if ($error && in_array($error['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR])) {
+    if ($error && in_array($error['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR], true)) {
         ob_end_clean();
         http_response_code(500);
         header('Content-Type: application/json');
-        echo json_encode(['success' => false, 'message' => "Fatal PHP error: {$error['message']} in {$error['file']} on line {$error['line']}"]);
+        echo json_encode([
+            'success' => false,
+            'message' => "Fatal PHP error: {$error['message']} in {$error['file']} on line {$error['line']}",
+        ]);
     }
 });
+
 header('Content-Type: application/json');
 
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
@@ -23,15 +32,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     exit;
 }
 
-function respond($statusCode, $payload) {
+function respond($statusCode, $payload)
+{
     ob_end_clean();
     http_response_code($statusCode);
     echo json_encode($payload);
     exit;
 }
 
-function permission_to_level($permissionRaw) {
-    $value = trim((string)$permissionRaw);
+function permission_to_level($permissionRaw)
+{
+    $value = trim((string) $permissionRaw);
     if ($value === '4' || strcasecmp($value, 'Super Administrator') === 0) return 4;
     if ($value === '3' || strcasecmp($value, 'Administrator') === 0 || strcasecmp($value, 'Admin') === 0) return 3;
     if ($value === '2' || strcasecmp($value, 'Editor') === 0) return 2;
@@ -40,29 +51,65 @@ function permission_to_level($permissionRaw) {
     return 0;
 }
 
-function sql_quote_identifier($identifier) {
-    return '`' . str_replace('`', '``', $identifier) . '`';
+function quote_ident($identifier)
+{
+    return '"' . str_replace('"', '""', $identifier) . '"';
 }
 
-function query_single_value($con, $sql) {
-    $result = mysqli_query($con, $sql);
-    if (!$result) return null;
-    $row = mysqli_fetch_row($result);
-    mysqli_free_result($result);
-    return $row ? $row[0] : null;
+function pdo_column_name($con, $table, $column)
+{
+    $stmt = $con->prepare(
+        'SELECT column_name FROM information_schema.columns WHERE table_schema = :schema AND lower(table_name) = lower(:table) AND lower(column_name) = lower(:column) LIMIT 1'
+    );
+    $stmt->execute([
+        ':schema' => 'public',
+        ':table' => $table,
+        ':column' => $column,
+    ]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    return $row ? $row['column_name'] : null;
 }
 
-function table_exists($con, $tableName) {
-    $escapedTable = mysqli_real_escape_string($con, $tableName);
-    $result = mysqli_query($con, "SHOW TABLES LIKE '$escapedTable'");
-    if (!$result) return false;
-    $row = mysqli_fetch_row($result);
-    mysqli_free_result($result);
-    return $row ? $row[0] : false;
+function verify_google_token($token)
+{
+    if (!function_exists('curl_init')) {
+        return null;
+    }
+
+    $googlePayload = null;
+
+    $userinfoUrl = 'https://www.googleapis.com/oauth2/v3/userinfo';
+    $ch = curl_init($userinfoUrl);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, ['Authorization: Bearer ' . $token]);
+    $body = curl_exec($ch);
+    $err = curl_error($ch);
+    $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    if (!$err && $code === 200) {
+        $googlePayload = json_decode($body, true);
+    }
+
+    if (!$googlePayload || !isset($googlePayload['sub'])) {
+        $verifyUrl = 'https://oauth2.googleapis.com/tokeninfo?id_token=' . urlencode($token);
+        $ch2 = curl_init($verifyUrl);
+        curl_setopt($ch2, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch2, CURLOPT_TIMEOUT, 10);
+        $body2 = curl_exec($ch2);
+        $err2 = curl_error($ch2);
+        $code2 = curl_getinfo($ch2, CURLINFO_HTTP_CODE);
+        curl_close($ch2);
+
+        if (!$err2 && $code2 === 200) {
+            $googlePayload = json_decode($body2, true);
+        }
+    }
+
+    return $googlePayload;
 }
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-    respond(405, array('success' => false, 'message' => 'Method not allowed'));
+    respond(405, ['success' => false, 'message' => 'Method not allowed']);
 }
 
 $rawInput = file_get_contents('php://input');
@@ -71,250 +118,183 @@ if (!is_array($input)) {
     $input = $_POST;
 }
 
-if (!function_exists('curl_init')) {
-    respond(500, array('success' => false, 'message' => 'cURL is not enabled on this server. Please enable the PHP cURL extension.'));
-}
-
-$idToken = isset($input['idToken']) ? trim($input['idToken']) : '';
+$idToken = isset($input['idToken']) ? trim((string) $input['idToken']) : '';
 if ($idToken === '') {
-    respond(400, array('success' => false, 'message' => 'idToken is required'));
+    respond(400, ['success' => false, 'message' => 'idToken is required']);
 }
 
-// ── Verify the Google token ───────────────────────────────────────────────────
-// Supports both access_token (implicit flow) and id_token (code/PKCE flow).
-// Try userinfo endpoint first (for access tokens), fall back to tokeninfo (for id tokens).
-$googlePayload = null;
-
-$userinfoUrl = 'https://www.googleapis.com/oauth2/v3/userinfo';
-$curlHandle = curl_init($userinfoUrl);
-curl_setopt($curlHandle, CURLOPT_RETURNTRANSFER, true);
-curl_setopt($curlHandle, CURLOPT_TIMEOUT, 10);
-curl_setopt($curlHandle, CURLOPT_HTTPHEADER, array('Authorization: Bearer ' . $idToken));
-$curlResponse = curl_exec($curlHandle);
-$curlError    = curl_error($curlHandle);
-$httpStatus   = curl_getinfo($curlHandle, CURLINFO_HTTP_CODE);
-curl_close($curlHandle);
-
-if (!$curlError && $httpStatus === 200) {
-    $googlePayload = json_decode($curlResponse, true);
-}
-
-// Fallback: treat token as id_token and use tokeninfo
-if (!$googlePayload || !isset($googlePayload['sub'])) {
-    $verifyUrl = 'https://oauth2.googleapis.com/tokeninfo?id_token=' . urlencode($idToken);
-    $curlHandle = curl_init($verifyUrl);
-    curl_setopt($curlHandle, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($curlHandle, CURLOPT_TIMEOUT, 10);
-    $curlResponse = curl_exec($curlHandle);
-    $curlError    = curl_error($curlHandle);
-    $httpStatus   = curl_getinfo($curlHandle, CURLINFO_HTTP_CODE);
-    curl_close($curlHandle);
-
-    if (!$curlError && $httpStatus === 200) {
-        $googlePayload = json_decode($curlResponse, true);
-    }
-}
-
+$googlePayload = verify_google_token($idToken);
 if (!$googlePayload || !isset($googlePayload['sub']) || !isset($googlePayload['email'])) {
-    respond(401, array('success' => false, 'message' => 'Google token verification failed'));
+    respond(401, ['success' => false, 'message' => 'Google token verification failed']);
 }
 
-$googleSub   = $googlePayload['sub'];
-$googleEmail = strtolower(trim($googlePayload['email']));
-$googleName  = isset($googlePayload['name']) ? $googlePayload['name'] : $googleEmail;
+$googleSub = (string) $googlePayload['sub'];
+$googleEmail = strtolower(trim((string) $googlePayload['email']));
+$googleName = isset($googlePayload['name']) ? (string) $googlePayload['name'] : $googleEmail;
 
-// ── Connect to DB ─────────────────────────────────────────────────────────────
-include('db.php');
-if (!mysqli_select_db($con, $db)) {
-    respond(500, array('success' => false, 'message' => 'Database connection failed'));
+include 'db.php';
+if (!$con) {
+    respond(500, ['success' => false, 'message' => 'Database connection failed']);
 }
 
-// Resolve the user table name
-$loginTable = 'Login_user_AWS';
-$candidateTables = array('Login_user_AWS', 'login_user_aws', 'Login_User_AWS', 'Login_user', 'login_user', 'users');
-foreach ($candidateTables as $tbl) {
-    $escaped = mysqli_real_escape_string($con, $tbl);
-    $res = mysqli_query($con, "SHOW TABLES LIKE '$escaped'");
-    if ($res && mysqli_fetch_row($res)) {
-        $loginTable = $tbl;
-        break;
-    }
-}
-
-$quotedTable = sql_quote_identifier($loginTable);
-
-// ── Ensure google_sub column exists ──────────────────────────────────────────
-$hasGoogleSub = (bool) query_single_value($con, "SHOW COLUMNS FROM $quotedTable LIKE 'google_sub'");
-if (!$hasGoogleSub) {
-    mysqli_query($con, "ALTER TABLE $quotedTable ADD COLUMN google_sub VARCHAR(128) DEFAULT NULL");
-    $hasGoogleSub = (bool) query_single_value($con, "SHOW COLUMNS FROM $quotedTable LIKE 'google_sub'");
-}
-
-// Detect optional columns
-$hasPhone      = (bool) query_single_value($con, "SHOW COLUMNS FROM $quotedTable LIKE 'phone'");
-$hasPermissions= (bool) query_single_value($con, "SHOW COLUMNS FROM $quotedTable LIKE 'Permissions'");
-$hasStatus     = (bool) query_single_value($con, "SHOW COLUMNS FROM $quotedTable LIKE 'status'");
-$hasOrgId      = (bool) query_single_value($con, "SHOW COLUMNS FROM $quotedTable LIKE 'org_id'");
-$hasOrgRole    = (bool) query_single_value($con, "SHOW COLUMNS FROM $quotedTable LIKE 'org_role'");
-$hasFreeUser   = (bool) query_single_value($con, "SHOW COLUMNS FROM $quotedTable LIKE 'is_free_user'");
-$hasAuthToken  = (bool) query_single_value($con, "SHOW COLUMNS FROM $quotedTable LIKE 'auth_token'");
-
-if (!$hasAuthToken) {
-    mysqli_query($con, "ALTER TABLE $quotedTable ADD COLUMN auth_token VARCHAR(255) DEFAULT NULL");
-    $hasAuthToken = (bool) query_single_value($con, "SHOW COLUMNS FROM $quotedTable LIKE 'auth_token'");
-}
-
-$phoneExpr       = $hasPhone       ? 'phone'              : "'' AS phone";
-$permissionsExpr = $hasPermissions ? 'Permissions'        : "'' AS Permissions";
-$orgIdExpr       = $hasOrgId       ? 'org_id'             : '0 AS org_id';
-$orgRoleExpr     = $hasOrgRole     ? 'org_role'           : "'viewer' AS org_role";
-$freeUserExpr    = $hasFreeUser    ? 'is_free_user'       : '0 AS is_free_user';
-$googleSubExpr   = $hasGoogleSub   ? 'google_sub'         : "'' AS google_sub";
-$statusCond      = $hasStatus      ? "status = 'true' AND " : "";
-
-$userRow = null;
-
-// ── 1. Look up by google_sub ──────────────────────────────────────────────────
-if ($hasGoogleSub) {
-    $sql = "SELECT id, username, email, $phoneExpr, $permissionsExpr, $orgIdExpr, $orgRoleExpr, $freeUserExpr, $googleSubExpr
-            FROM $quotedTable
-            WHERE $statusCond google_sub = ? LIMIT 1";
-    $stmt = mysqli_prepare($con, $sql);
-    if ($stmt) {
-        mysqli_stmt_bind_param($stmt, 's', $googleSub);
-        mysqli_stmt_execute($stmt);
-        mysqli_stmt_bind_result($stmt, $id, $username, $email, $phone, $permissionsRaw, $orgId, $orgRole, $isFreeUserRaw, $gSub);
-        if (mysqli_stmt_fetch($stmt)) {
-            $userRow = compact('id','username','email','phone','permissionsRaw','orgId','orgRole','isFreeUserRaw');
-            $userRow['Permissions'] = $permissionsRaw;
-            $userRow['org_id']      = $orgId;
-            $userRow['org_role']    = $orgRole;
-            $userRow['is_free_user']= $isFreeUserRaw;
+try {
+    $loginTable = 'Login_user_AWS';
+    $candidateTables = ['Login_user_AWS', 'login_user_aws', 'Login_User_AWS', 'Login_user', 'login_user', 'users'];
+    foreach ($candidateTables as $tbl) {
+        $stmt = $con->prepare("SELECT to_regclass('public.' || :qname) AS reg");
+        $stmt->execute([':qname' => quote_ident($tbl)]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($row && !empty($row['reg'])) {
+            $loginTable = $tbl;
+            break;
         }
-        mysqli_stmt_close($stmt);
     }
-}
 
-// ── 2. Look up by email (link the account) ───────────────────────────────────
-if (!$userRow) {
-    $sql = "SELECT id, username, email, $phoneExpr, $permissionsExpr, $orgIdExpr, $orgRoleExpr, $freeUserExpr
-            FROM $quotedTable
-            WHERE $statusCond email = ? LIMIT 1";
-    $stmt = mysqli_prepare($con, $sql);
-    if ($stmt) {
-        mysqli_stmt_bind_param($stmt, 's', $googleEmail);
-        mysqli_stmt_execute($stmt);
-        mysqli_stmt_bind_result($stmt, $id, $username, $email, $phone, $permissionsRaw, $orgId, $orgRole, $isFreeUserRaw);
-        if (mysqli_stmt_fetch($stmt)) {
-            $userRow = array(
-                'id'          => $id,
-                'username'    => $username,
-                'email'       => $email,
-                'phone'       => $phone,
-                'Permissions' => $permissionsRaw,
-                'org_id'      => $orgId,
-                'org_role'    => $orgRole,
-                'is_free_user'=> $isFreeUserRaw,
-            );
-            // Store google_sub to speed up future logins
-            if ($hasGoogleSub) {
-                $linkStmt = mysqli_prepare($con, "UPDATE $quotedTable SET google_sub = ? WHERE id = ? LIMIT 1");
-                if ($linkStmt) {
-                    mysqli_stmt_bind_param($linkStmt, 'si', $googleSub, $id);
-                    mysqli_stmt_execute($linkStmt);
-                    mysqli_stmt_close($linkStmt);
-                }
+    $tableQ = quote_ident($loginTable);
+
+    $colId = pdo_column_name($con, $loginTable, 'id') ?: 'id';
+    $colUsername = pdo_column_name($con, $loginTable, 'username') ?: 'username';
+    $colEmail = pdo_column_name($con, $loginTable, 'email') ?: 'email';
+    $colPassword = pdo_column_name($con, $loginTable, 'password') ?: 'password';
+    $colPhone = pdo_column_name($con, $loginTable, 'phone');
+    $colPermissions = pdo_column_name($con, $loginTable, 'permissions') ?: pdo_column_name($con, $loginTable, 'Permissions');
+    $colOrgId = pdo_column_name($con, $loginTable, 'org_id');
+    $colOrgRole = pdo_column_name($con, $loginTable, 'org_role');
+    $colFreeUser = pdo_column_name($con, $loginTable, 'is_free_user');
+    $colStatus = pdo_column_name($con, $loginTable, 'status');
+    $colAuthToken = pdo_column_name($con, $loginTable, 'auth_token');
+    $colGoogleSub = pdo_column_name($con, $loginTable, 'google_sub');
+
+    if (!$colGoogleSub) {
+        $con->exec("ALTER TABLE $tableQ ADD COLUMN google_sub VARCHAR(128) DEFAULT NULL");
+        $colGoogleSub = pdo_column_name($con, $loginTable, 'google_sub');
+    }
+    if (!$colAuthToken) {
+        $con->exec("ALTER TABLE $tableQ ADD COLUMN auth_token VARCHAR(255) DEFAULT NULL");
+        $colAuthToken = pdo_column_name($con, $loginTable, 'auth_token');
+    }
+
+    $idQ = quote_ident($colId);
+    $usernameQ = quote_ident($colUsername);
+    $emailQ = quote_ident($colEmail);
+    $phoneExpr = $colPhone ? quote_ident($colPhone) : "'' AS phone";
+    $permissionsExpr = $colPermissions ? quote_ident($colPermissions) : "'' AS permissions";
+    $orgIdExpr = $colOrgId ? quote_ident($colOrgId) : '0 AS org_id';
+    $orgRoleExpr = $colOrgRole ? quote_ident($colOrgRole) : "'viewer' AS org_role";
+    $freeUserExpr = $colFreeUser ? quote_ident($colFreeUser) : '0 AS is_free_user';
+    $googleSubExpr = $colGoogleSub ? quote_ident($colGoogleSub) : "'' AS google_sub";
+
+    $statusCond = '1=1';
+    if ($colStatus) {
+        $statusQ = quote_ident($colStatus);
+        $statusCond = "COALESCE(CAST($statusQ AS text), '') ILIKE 'true'";
+    }
+
+    $userRow = null;
+
+    if ($colGoogleSub) {
+        $googleSubQ = quote_ident($colGoogleSub);
+        $sql = "SELECT $idQ AS id, $usernameQ AS username, $emailQ AS email, $phoneExpr, $permissionsExpr AS permissions, $orgIdExpr AS org_id, $orgRoleExpr AS org_role, $freeUserExpr AS is_free_user, $googleSubExpr FROM $tableQ WHERE $statusCond AND $googleSubQ = :googleSub LIMIT 1";
+        $stmt = $con->prepare($sql);
+        $stmt->execute([':googleSub' => $googleSub]);
+        $userRow = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+    }
+
+    if (!$userRow) {
+        $emailQWhere = quote_ident($colEmail);
+        $sql = "SELECT $idQ AS id, $usernameQ AS username, $emailQ AS email, $phoneExpr, $permissionsExpr AS permissions, $orgIdExpr AS org_id, $orgRoleExpr AS org_role, $freeUserExpr AS is_free_user FROM $tableQ WHERE $statusCond AND $emailQWhere = :email LIMIT 1";
+        $stmt = $con->prepare($sql);
+        $stmt->execute([':email' => $googleEmail]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($row) {
+            $userRow = $row;
+            if ($colGoogleSub) {
+                $googleSubQ = quote_ident($colGoogleSub);
+                $stmtUp = $con->prepare("UPDATE $tableQ SET $googleSubQ = :googleSub WHERE $idQ = :id");
+                $stmtUp->execute([':googleSub' => $googleSub, ':id' => intval($row['id'])]);
             }
         }
-        mysqli_stmt_close($stmt);
     }
-}
 
-// ── 2b. Existing email found but not active yet ─────────────────────────────
-if (!$userRow && $hasStatus) {
-    $pendingSql = "SELECT id FROM $quotedTable WHERE email = ? AND status <> 'true' LIMIT 1";
-    $pendingStmt = mysqli_prepare($con, $pendingSql);
-    if ($pendingStmt) {
-        mysqli_stmt_bind_param($pendingStmt, 's', $googleEmail);
-        mysqli_stmt_execute($pendingStmt);
-        mysqli_stmt_bind_result($pendingStmt, $pendingId);
-        if (mysqli_stmt_fetch($pendingStmt)) {
-            mysqli_stmt_close($pendingStmt);
-            respond(403, array(
+    if (!$userRow && $colStatus) {
+        $statusQ = quote_ident($colStatus);
+        $emailQWhere = quote_ident($colEmail);
+        $pendingSql = "SELECT $idQ AS id FROM $tableQ WHERE $emailQWhere = :email AND NOT (COALESCE(CAST($statusQ AS text), '') ILIKE 'true') LIMIT 1";
+        $stmtPending = $con->prepare($pendingSql);
+        $stmtPending->execute([':email' => $googleEmail]);
+        $pendingRow = $stmtPending->fetch(PDO::FETCH_ASSOC);
+        if ($pendingRow) {
+            respond(403, [
                 'success' => false,
                 'message' => 'Your account is pending administrator approval. Please contact your administrator.',
                 'pendingApproval' => true,
                 'email' => $googleEmail,
-            ));
+            ]);
         }
-        mysqli_stmt_close($pendingStmt);
-    }
-}
-
-// ── 3. No existing account → create a pending user ───────────────────────────
-if (!$userRow) {
-    // Generate a random placeholder password (never used for password auth)
-    $placeholder = bin2hex(random_bytes(16));
-    $escapedName  = mysqli_real_escape_string($con, $googleName);
-    $escapedEmail = mysqli_real_escape_string($con, $googleEmail);
-    $escapedSub   = $hasGoogleSub ? mysqli_real_escape_string($con, $googleSub) : null;
-
-    $googleSubCol = $hasGoogleSub ? ', google_sub' : '';
-    $googleSubVal = $hasGoogleSub ? ", '$escapedSub'" : '';
-    $statusCol    = $hasStatus    ? ', status'      : '';
-    $statusVal    = $hasStatus    ? ", 'false'"     : '';   // requires admin approval
-
-    $insertSql = "INSERT INTO $quotedTable (username, email, password, Permissions $googleSubCol $statusCol)
-                  VALUES ('$escapedName', '$escapedEmail', MD5('$placeholder'), '3' $googleSubVal $statusVal)";
-
-    if (!mysqli_query($con, $insertSql)) {
-        respond(500, array('success' => false, 'message' => 'Could not create user account'));
     }
 
-    $newId = mysqli_insert_id($con);
+    if (!$userRow) {
+        $placeholder = bin2hex(random_bytes(16));
+        $hashed = password_hash($placeholder, PASSWORD_DEFAULT);
 
-    respond(403, array(
-        'success' => false,
-        'message'  => 'Account created but pending admin approval. Please contact your administrator.',
-        'pendingApproval' => true,
-        'email' => $googleEmail,
-    ));
-}
+        $cols = [$usernameQ, quote_ident($colEmail), quote_ident($colPassword)];
+        $vals = [':username', ':email', ':password'];
+        $params = [
+            ':username' => $googleName,
+            ':email' => $googleEmail,
+            ':password' => $hashed,
+        ];
 
-// ── Issue a new bearer token ──────────────────────────────────────────────────
-if (function_exists('random_bytes')) {
+        if ($colPermissions) {
+            $cols[] = quote_ident($colPermissions);
+            $vals[] = ':permissions';
+            $params[':permissions'] = '3';
+        }
+        if ($colGoogleSub) {
+            $cols[] = quote_ident($colGoogleSub);
+            $vals[] = ':googleSub';
+            $params[':googleSub'] = $googleSub;
+        }
+        if ($colStatus) {
+            $cols[] = quote_ident($colStatus);
+            $vals[] = ':status';
+            $params[':status'] = 'false';
+        }
+        if ($colOrgRole) {
+            $cols[] = quote_ident($colOrgRole);
+            $vals[] = ':orgRole';
+            $params[':orgRole'] = 'admin';
+        }
+
+        $insertSql = 'INSERT INTO ' . $tableQ . ' (' . implode(', ', $cols) . ') VALUES (' . implode(', ', $vals) . ') RETURNING ' . $idQ;
+        $stmtIns = $con->prepare($insertSql);
+        $stmtIns->execute($params);
+
+        respond(403, [
+            'success' => false,
+            'message' => 'Account created but pending admin approval. Please contact your administrator.',
+            'pendingApproval' => true,
+            'email' => $googleEmail,
+        ]);
+    }
+
     $token = bin2hex(random_bytes(24));
-} else {
-    $token = md5(uniqid('', true));
-}
+    $authTokenQ = quote_ident($colAuthToken);
+    $stmtToken = $con->prepare("UPDATE $tableQ SET $authTokenQ = :token WHERE $idQ = :id");
+    $stmtToken->execute([
+        ':token' => $token,
+        ':id' => intval($userRow['id']),
+    ]);
 
-$stmtToken = mysqli_prepare($con, "UPDATE $quotedTable SET auth_token = ? WHERE id = ? LIMIT 1");
-if (!$stmtToken) {
-    respond(500, array('success' => false, 'message' => 'Failed to prepare auth token update: ' . mysqli_error($con)));
-}
-
-$userIdForToken = intval($userRow['id']);
-mysqli_stmt_bind_param($stmtToken, 'si', $token, $userIdForToken);
-if (!mysqli_stmt_execute($stmtToken)) {
-    $stmtErr = mysqli_stmt_error($stmtToken);
-    mysqli_stmt_close($stmtToken);
-    respond(500, array('success' => false, 'message' => 'Failed to persist auth token: ' . $stmtErr));
-}
-mysqli_stmt_close($stmtToken);
-
-// ── Load subscription / org info ──────────────────────────────────────────────
-$subscription = null;
-$orgId = isset($userRow['org_id']) ? intval($userRow['org_id']) : 0;
-if ($orgId > 0) {
-    $orgIdSafe = intval($orgId);
-    $orgRes = mysqli_query($con, "SELECT plan_status, trial_ends_at, COALESCE(free_account, 0) AS free_account FROM organizations WHERE id = $orgIdSafe LIMIT 1");
-    if ($orgRes) {
-        $orgRow = mysqli_fetch_assoc($orgRes);
-        mysqli_free_result($orgRes);
-
+    $subscription = null;
+    $orgId = isset($userRow['org_id']) ? intval($userRow['org_id']) : 0;
+    if ($orgId > 0) {
+        $orgStmt = $con->prepare('SELECT plan_status, trial_ends_at, COALESCE(free_account, 0) AS free_account FROM organizations WHERE id = :orgId LIMIT 1');
+        $orgStmt->execute([':orgId' => $orgId]);
+        $orgRow = $orgStmt->fetch(PDO::FETCH_ASSOC);
         if ($orgRow) {
-            $planStatus = isset($orgRow['plan_status']) ? $orgRow['plan_status'] : null;
-            $trialEndsAt = isset($orgRow['trial_ends_at']) ? $orgRow['trial_ends_at'] : null;
+            $planStatus = $orgRow['plan_status'] ?? null;
+            $trialEndsAt = $orgRow['trial_ends_at'] ?? null;
             $freeAccount = !empty($orgRow['free_account']);
 
             if ($freeAccount) {
@@ -326,46 +306,52 @@ if ($orgId > 0) {
                     $trialEnd = new DateTime($trialEndsAt, new DateTimeZone('UTC'));
                     if ($planStatus === 'trial' && $now > $trialEnd) {
                         $planStatus = 'expired';
-                        mysqli_query($con, "UPDATE organizations SET plan_status='expired' WHERE id=$orgIdSafe");
+                        $upd = $con->prepare("UPDATE organizations SET plan_status = 'expired' WHERE id = :orgId");
+                        $upd->execute([':orgId' => $orgId]);
                     }
-                    $trialDaysLeft = max(0, (int)ceil(($trialEnd->getTimestamp() - $now->getTimestamp()) / 86400));
+                    $trialDaysLeft = max(0, (int) ceil(($trialEnd->getTimestamp() - $now->getTimestamp()) / 86400));
                 } else {
                     $trialDaysLeft = 0;
                 }
             }
 
             $subscription = [
-                'orgId'        => $orgIdSafe,
-                'orgRole'      => $userRow['org_role'] ?? 'viewer',
-                'planStatus'   => $planStatus,
-                'trialEndsAt'  => $trialEndsAt,
-                'trialDaysLeft'=> $trialDaysLeft,
-                'freeAccount'  => $freeAccount,
+                'orgId' => $orgId,
+                'orgRole' => $userRow['org_role'] ?? 'viewer',
+                'planStatus' => $planStatus,
+                'trialEndsAt' => $trialEndsAt,
+                'trialDaysLeft' => $trialDaysLeft,
+                'freeAccount' => $freeAccount,
             ];
         }
     }
+
+    $permissions = permission_to_level($userRow['permissions'] ?? '');
+    $role = $permissions >= 3 ? 'admin' : 'user';
+
+    $user = [
+        'id' => intval($userRow['id']),
+        'name' => $userRow['username'] ?? '',
+        'email' => $userRow['email'] ?? '',
+        'phone' => $userRow['phone'] ?? '',
+        'role' => $role,
+        'permissionLevel' => $permissions,
+        'orgRole' => $userRow['org_role'] ?? 'viewer',
+        'isFreeUser' => !empty($userRow['is_free_user']),
+        'createdAt' => date('c'),
+    ];
+
+    respond(200, [
+        'success' => true,
+        'data' => [
+            'token' => $token,
+            'user' => $user,
+            'subscription' => $subscription,
+        ],
+    ]);
+} catch (Exception $e) {
+    respond(500, [
+        'success' => false,
+        'message' => 'Google login failed: ' . $e->getMessage(),
+    ]);
 }
-
-$permissions = permission_to_level(isset($userRow['Permissions']) ? $userRow['Permissions'] : '');
-$role = $permissions >= 3 ? 'admin' : 'user';
-
-$user = array(
-    'id'             => intval($userRow['id']),
-    'name'           => $userRow['username'],
-    'email'          => $userRow['email'],
-    'phone'          => $userRow['phone'] ?? '',
-    'role'           => $role,
-    'permissionLevel'=> $permissions,
-    'orgRole'        => $userRow['org_role'] ?? 'viewer',
-    'isFreeUser'     => !empty($userRow['is_free_user']),
-    'createdAt'      => date('c'),
-);
-
-respond(200, array(
-    'success' => true,
-    'data' => array(
-        'token'        => $token,
-        'user'         => $user,
-        'subscription' => $subscription,
-    )
-));

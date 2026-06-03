@@ -1,9 +1,75 @@
 <?php
+$debugLog = __DIR__ . '/login_debug.log';
+// Debug logging for troubleshooting (only for POST requests)
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    // $identifier and $password are not yet defined here, so this block should be moved after they are set.
+    // We'll move this block to after $identifier and $password are set below.
+}
+
+// Always send CORS headers first
+include_once __DIR__ . '/cors.php';
 header('Content-Type: application/json');
 
+// Handle CORS preflight OPTIONS requests before any other logic
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(204);
     exit;
+}
+
+// Postgres-compatible: Find login table name
+function find_login_table_name($con, $dbName) {
+    global $debugLog;
+    // Log all visible table names for diagnostics (guaranteed to run)
+    $tableList = [];
+    $tableListError = null;
+    try {
+        $stmt = $con->prepare("SELECT table_name, table_schema FROM information_schema.tables WHERE table_schema = 'public'");
+        $stmt->execute();
+        $allTables = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        $tableList = array_map(function($row) { return $row['table_schema'] . '.' . $row['table_name']; }, $allTables);
+    } catch (Exception $e) {
+        $tableListError = $e->getMessage();
+    }
+    if (!empty($tableList)) {
+        file_put_contents($debugLog, date('c') . " | [DEBUG] Tables visible to connection (guaranteed): " . implode(', ', $tableList) . "\n", FILE_APPEND);
+    } else if ($tableListError) {
+        file_put_contents($debugLog, date('c') . " | [DEBUG] Error fetching table list (guaranteed): " . $tableListError . "\n", FILE_APPEND);
+    } else {
+        file_put_contents($debugLog, date('c') . " | [DEBUG] No tables visible to connection (guaranteed)\n", FILE_APPEND);
+    }
+    $candidateTables = array(
+        'Login_user_AWS', // actual case in DB
+        'login_user_aws',
+        'login_user',
+        'users'
+    );
+    file_put_contents($debugLog, date('c') . " | [DEBUG] Searching for login table in DB: $dbName\n", FILE_APPEND);
+
+    // Search information_schema.tables for a matching table (case-insensitive)
+    $sql = "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND LOWER(table_name) = :candidate LIMIT 1";
+    foreach ($candidateTables as $candidateTable) {
+        $stmt = $con->prepare($sql);
+        $stmt->execute([':candidate' => strtolower($candidateTable)]);
+        $result = $stmt->fetchColumn();
+        file_put_contents($debugLog, date('c') . " | [DEBUG] Candidate: $candidateTable, Found: " . ($result ? $result : 'none') . "\n", FILE_APPEND);
+        if ($result) {
+            file_put_contents($debugLog, date('c') . " | [DEBUG] Using candidate table: $result\n", FILE_APPEND);
+            return $result;
+        }
+    }
+
+    // Fallback: search for a table with username, password, and email columns (case-insensitive)
+    $sql = "SELECT table_name FROM information_schema.columns WHERE table_schema = 'public' AND LOWER(column_name) IN ('username','password','email') GROUP BY table_name HAVING COUNT(DISTINCT LOWER(column_name)) = 3 LIMIT 1";
+    $stmt = $con->prepare($sql);
+    $stmt->execute();
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    file_put_contents($debugLog, date('c') . " | [DEBUG] Fallback search result: " . (isset($row['table_name']) ? $row['table_name'] : 'none') . "\n", FILE_APPEND);
+    if ($row && isset($row['table_name'])) {
+        file_put_contents($debugLog, date('c') . " | [DEBUG] Using fallback table: " . $row['table_name'] . "\n", FILE_APPEND);
+        return $row['table_name'];
+    }
+    file_put_contents($debugLog, date('c') . " | [DEBUG] No login table found in DB: $dbName\n", FILE_APPEND);
+    return null;
 }
 
 function respond($statusCode, $payload) {
@@ -32,8 +98,14 @@ if (!is_array($input)) {
     $input = $_POST;
 }
 
+
 $identifier = isset($input['email']) ? trim($input['email']) : '';
 $password = isset($input['password']) ? trim($input['password']) : '';
+
+// Debug logging for troubleshooting (only for POST requests)
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    file_put_contents(__DIR__ . '/login_debug.log', date('c') . " | identifier: $identifier | password: $password\n", FILE_APPEND);
+}
 
 if ($identifier === '' || $password === '') {
     respond(400, array('success' => false, 'message' => 'Email/username and password are required'));
@@ -48,72 +120,10 @@ if ($atPos !== false) {
 include('db.pgsql.php');
 
 
-
-    $stmt = $con->query($sql);
-    if (!$stmt) return null;
-    $row = $stmt->fetch(PDO::FETCH_NUM);
-    return $row ? $row[0] : null;
-}
-
-    $sql = "SELECT to_regclass(:tableName)";
-    $stmt = $con->prepare($sql);
-    $stmt->execute([':tableName' => $tableName]);
-    $row = $stmt->fetch(PDO::FETCH_NUM);
-    return $row && $row[0] ? $tableName : false;
-}
-
-    $candidateTables = array(
-        'login_user_aws',
-        'login_user',
-        'users'
-    );
-    foreach ($candidateTables as $candidateTable) {
-        $matchedTable = table_exists($con, $candidateTable);
-        if ($matchedTable) {
-            return $matchedTable;
-        }
-    }
-    // Fallback: find a table with username, password, email columns
-    $sql = "SELECT table_name FROM information_schema.columns WHERE table_catalog = :dbName AND column_name IN ('username','password','email') GROUP BY table_name HAVING COUNT(DISTINCT column_name) = 3 LIMIT 1";
-    $stmt = $con->prepare($sql);
-    $stmt->execute([':dbName' => $dbName]);
-    $row = $stmt->fetch(PDO::FETCH_ASSOC);
-    if ($row && isset($row['table_name'])) {
-        return $row['table_name'];
-    }
-    return null;
-}
-
-    $diagnostics = array(
-        'tables' => array(),
-        'matches' => array(),
-        'showTablesError' => null,
-    );
-    $sql = "SELECT table_name FROM information_schema.tables WHERE table_catalog = :dbName AND table_schema = 'public'";
-    $stmt = $con->prepare($sql);
-    $stmt->execute([':dbName' => $GLOBALS['db']]);
-    $tables = $stmt->fetchAll(PDO::FETCH_COLUMN);
-    foreach ($tables as $tableName) {
-        $diagnostics['tables'][] = $tableName;
-        $hasUsername = has_column($con, $GLOBALS['db'], $tableName, 'username');
-        $hasPassword = has_column($con, $GLOBALS['db'], $tableName, 'password');
-        $hasEmail = has_column($con, $GLOBALS['db'], $tableName, 'email');
-        if ($hasUsername || $hasPassword || $hasEmail) {
-            $diagnostics['matches'][] = array(
-                'table' => $tableName,
-                'username' => $hasUsername,
-                'password' => $hasPassword,
-                'email' => $hasEmail,
-            );
-        }
-    }
-    return $diagnostics;
-}
-
 function has_column($con, $dbName, $tableName, $columnName) {
-    $sql = "SELECT 1 FROM information_schema.columns WHERE table_catalog = :dbName AND table_name = :tableName AND column_name = :columnName LIMIT 1";
+    $sql = "SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND LOWER(table_name) = LOWER(:tableName) AND LOWER(column_name) = LOWER(:columnName) LIMIT 1";
     $stmt = $con->prepare($sql);
-    $stmt->execute([':dbName' => $dbName, ':tableName' => $tableName, ':columnName' => $columnName]);
+    $stmt->execute([':tableName' => $tableName, ':columnName' => $columnName]);
     return $stmt->fetchColumn() ? true : false;
 }
 
@@ -121,8 +131,7 @@ $loginTable = find_login_table_name($con, $db);
 if (!$loginTable) {
     respond(500, array(
         'success' => false,
-        'message' => "Login table not found in database '$db'. Expected a table like Login_user_AWS with username/password/email columns.",
-        'diagnostics' => get_table_diagnostics($con)
+        'message' => "Login table not found in database '$db'. Expected a table like Login_user_AWS with username/password/email columns."
     ));
 }
 
@@ -130,12 +139,12 @@ $hasStatus = has_column($con, $db, $loginTable, 'status');
 $hasOrgId = has_column($con, $db, $loginTable, 'org_id');
 $hasOrgRole = has_column($con, $db, $loginTable, 'org_role');
 $hasPhone = has_column($con, $db, $loginTable, 'phone');
-$hasPermissions = has_column($con, $db, $loginTable, 'Permissions');
+$hasPermissions = has_column($con, $db, $loginTable, 'permissions');
 $hasFreeUser = has_column($con, $db, $loginTable, 'is_free_user');
 $hasGoogleOnly = has_column($con, $db, $loginTable, 'google_only');
 
 $phoneExpr = $hasPhone ? 'phone' : "'' AS phone";
-$permissionsExpr = $hasPermissions ? 'Permissions' : "'' AS Permissions";
+$permissionsExpr = $hasPermissions ? 'permissions' : "'' AS permissions";
 $orgIdExpr = $hasOrgId ? 'org_id' : '0 AS org_id';
 $orgRoleExpr = $hasOrgRole ? "org_role" : "'viewer' AS org_role";
 $freeUserExpr = $hasFreeUser ? 'is_free_user' : '0 AS is_free_user';
@@ -157,9 +166,11 @@ $stmt->execute([
 $row = $stmt->fetch(PDO::FETCH_ASSOC);
 if ($row) {
     $userRow = $row;
+    file_put_contents(__DIR__ . '/login_debug.log', date('c') . " | matched user: " . json_encode($row) . "\n", FILE_APPEND);
 }
 
 if (!$userRow) {
+    file_put_contents(__DIR__ . '/login_debug.log', date('c') . " | login failed for: $identifier\n", FILE_APPEND);
     if ($hasGoogleOnly) {
         $googleOnlyCheckSql = "SELECT google_only FROM \"$loginTable\" WHERE $whereStatus (username = :identifier OR username = :usernameCandidate OR email = :identifier2) LIMIT 1";
         $googleOnlyStmt = $con->prepare($googleOnlyCheckSql);
@@ -176,7 +187,7 @@ if (!$userRow) {
     respond(401, array('success' => false, 'message' => 'Invalid credentials'));
 }
 
-$permissions = permission_to_level(isset($userRow['Permissions']) ? $userRow['Permissions'] : '');
+$permissions = permission_to_level(isset($userRow['permissions']) ? $userRow['permissions'] : '');
 $role = $permissions >= 3 ? 'admin' : 'user';
 
 if (function_exists('random_bytes')) {
@@ -238,7 +249,6 @@ $user = array(
 );
 
 respond(200, array(
-    'success' => true,
     'data' => array(
         'token' => $token,
         'user' => $user,

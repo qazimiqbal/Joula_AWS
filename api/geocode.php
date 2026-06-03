@@ -1,9 +1,7 @@
 <?php
+include_once __DIR__ . '/cors.php';
 header('Content-Type: application/json');
 header('Access-Control-Allow-Origin: *');
-
-const GOOGLE_KEY_FALLBACK_PRIMARY = 'AIzaSyDzWWzAZ6-PxDds7RX3FVeaDa22RqIr8HU';
-const GOOGLE_KEY_FALLBACK_SECONDARY = 'AIzaSyAf-iWek9Zn3J00tIgYVcz0FDuTQFe_TD8';
 
 $address = isset($_GET['address']) ? trim($_GET['address']) : '';
 if ($address === '') {
@@ -24,8 +22,6 @@ function get_google_api_keys()
         ['key' => isset($_SERVER['GOOGLE_GEOCODING_API_KEY']) ? (string)$_SERVER['GOOGLE_GEOCODING_API_KEY'] : '', 'source' => '$_SERVER GOOGLE_GEOCODING_API_KEY'],
         ['key' => isset($_SERVER['GOOGLE_MAPS_API_KEY']) ? (string)$_SERVER['GOOGLE_MAPS_API_KEY'] : '', 'source' => '$_SERVER GOOGLE_MAPS_API_KEY'],
         ['key' => isset($_SERVER['VITE_GOOGLE_MAPS_API_KEY']) ? (string)$_SERVER['VITE_GOOGLE_MAPS_API_KEY'] : '', 'source' => '$_SERVER VITE_GOOGLE_MAPS_API_KEY'],
-        ['key' => GOOGLE_KEY_FALLBACK_PRIMARY, 'source' => 'hardcoded fallback primary'],
-        ['key' => GOOGLE_KEY_FALLBACK_SECONDARY, 'source' => 'hardcoded fallback secondary'],
     ];
 
     $out = [];
@@ -40,9 +36,13 @@ function get_google_api_keys()
 }
 
 $apiKeys = get_google_api_keys();
+
 if (count($apiKeys) === 0) {
     http_response_code(500);
-    echo json_encode(['success' => false, 'message' => 'Google geocoding API key is not configured on server']);
+    echo json_encode([
+        'success' => false,
+        'message' => 'Google geocoding API key is not configured on server',
+    ]);
     exit;
 }
 
@@ -68,22 +68,22 @@ foreach ($apiKeys as $candidate) {
     }
 }
 
-if ($status !== 'OK' || !is_array($location)) {
-    http_response_code(422);
+if ($status === 'OK' && is_array($location)) {
     echo json_encode([
-        'success' => false,
-        'message' => 'Google geocoder returned no result',
-        'status' => $status,
-        'errorMessage' => $errorMessage,
+        'success' => true,
+        'source' => 'google',
         'keySource' => $usedSource,
+        'lat' => (float)$location['lat'],
+        'lng' => (float)$location['lng'],
     ]);
     exit;
 }
 
+http_response_code(422);
 echo json_encode([
-    'success' => true,
-    'source' => 'google',
+    'success' => false,
+    'message' => 'Google geocoder returned no result',
+    'status' => $status,
+    'errorMessage' => $errorMessage,
     'keySource' => $usedSource,
-    'lat' => (float)$location['lat'],
-    'lng' => (float)$location['lng'],
 ]);

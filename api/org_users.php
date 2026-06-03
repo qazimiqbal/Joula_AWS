@@ -1,4 +1,5 @@
 <?php
+include_once __DIR__ . '/cors.php';
 header('Content-Type: application/json');
 
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
@@ -12,79 +13,60 @@ function respond($statusCode, $payload) {
     exit;
 }
 
-include('db.php');
-mysqli_select_db($con, $db);
+require_once 'db.pgsql.php';
 
-function has_column($con, $table, $column) {
-    $tableSafe = mysqli_real_escape_string($con, $table);
-    $columnSafe = mysqli_real_escape_string($con, $column);
-    $result = mysqli_query($con, "SHOW COLUMNS FROM `{$tableSafe}` LIKE '{$columnSafe}'");
-    if (!$result) return false;
-    $exists = mysqli_num_rows($result) > 0;
-    mysqli_free_result($result);
-    return $exists;
+function has_column($pdo, $table, $column) {
+    $sql = "SELECT column_name FROM information_schema.columns WHERE table_name = :table AND column_name = :column";
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute([':table' => $table, ':column' => $column]);
+    return $stmt->fetch(PDO::FETCH_ASSOC) !== false;
 }
 
 // ---------------------------------------------------------------
 // Auth helper
 // ---------------------------------------------------------------
-function get_authenticated_user($con) {
+function get_authenticated_user($pdo) {
     $authHeader = isset($_SERVER['HTTP_AUTHORIZATION']) ? $_SERVER['HTTP_AUTHORIZATION'] : '';
     if (strpos($authHeader, 'Bearer ') !== 0) return null;
     $token = substr($authHeader, 7);
-
-    $stmt = mysqli_prepare($con,
-        "SELECT id, org_id, org_role, email
-         FROM Login_user_AWS
-         WHERE auth_token = ? AND status = 'true' LIMIT 1");
-    if (!$stmt) return null;
-    mysqli_stmt_bind_param($stmt, 's', $token);
-    mysqli_stmt_execute($stmt);
-    $userId = $orgId = $orgRole = $email = null;
-    mysqli_stmt_bind_result($stmt, $userId, $orgId, $orgRole, $email);
-    $found = mysqli_stmt_fetch($stmt);
-    mysqli_stmt_close($stmt);
-    if (!$found || !$userId) return null;
-    return ['id' => intval($userId), 'org_id' => intval($orgId), 'org_role' => $orgRole, 'email' => $email];
+    $sql = 'SELECT "id", "org_id", "org_role", "email" FROM "Login_user_AWS" WHERE "auth_token" = :token AND "status" = :status LIMIT 1';
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute([':token' => $token, ':status' => 'true']);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$row) return null;
+    return [
+        'id' => intval($row['id']),
+        'org_id' => intval($row['org_id']),
+        'org_role' => $row['org_role'],
+        'email' => $row['email']
+    ];
 }
 
 // ---------------------------------------------------------------
 // GET /api/org_users.php  — list all users in the org
 // ---------------------------------------------------------------
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
-    $me = get_authenticated_user($con);
+    $me = get_authenticated_user($pdo);
     if (!$me) respond(401, ['success' => false, 'message' => 'Unauthorized']);
     if ($me['org_role'] !== 'org_admin' && $me['org_role'] !== 'admin') {
         respond(403, ['success' => false, 'message' => 'Only admins can view org users']);
     }
-
-    $hasPhone = has_column($con, 'Login_user_AWS', 'phone');
-    $selectPhone = $hasPhone ? 'phone' : "'' AS phone";
-
-    $stmt = mysqli_prepare($con,
-        "SELECT id, username, email, {$selectPhone}, org_role, status
-         FROM Login_user_AWS
-         WHERE org_id = ?
-         ORDER BY org_role, username");
-    if (!$stmt) {
-        respond(500, ['success' => false, 'message' => 'Failed to load org users', 'error' => mysqli_error($con)]);
-    }
-    mysqli_stmt_bind_param($stmt, 'i', $me['org_id']);
-    mysqli_stmt_execute($stmt);
+    $hasPhone = has_column($pdo, 'Login_user_AWS', 'phone');
+    $selectPhone = $hasPhone ? '"phone"' : "'' AS phone";
+    $sql = 'SELECT "id", "username", "email", ' . $selectPhone . ', "org_role", "status" FROM "Login_user_AWS" WHERE "org_id" = :org_id ORDER BY "org_role", "username"';
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute([':org_id' => $me['org_id']]);
     $users = [];
-    mysqli_stmt_bind_result($stmt, $uid, $uname, $uemail, $uphone, $uorgRole, $ustatus);
-    while (mysqli_stmt_fetch($stmt)) {
+    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
         $users[] = [
-            'id'       => intval($uid),
-            'username' => $uname,
-            'email'    => $uemail,
-            'phone'    => $uphone ?? '',
-            'orgRole'  => $uorgRole,
-            'status'   => $ustatus,
+            'id'       => intval($row['id']),
+            'username' => $row['username'],
+            'email'    => $row['email'],
+            'phone'    => $row['phone'] ?? '',
+            'orgRole'  => $row['org_role'],
+            'status'   => $row['status'],
         ];
     }
-    mysqli_stmt_close($stmt);
-
     // Count editors and viewers
     $editors = 0;
     $viewers = 0;
@@ -96,24 +78,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
             $viewers++;
         }
     }
-
     // Get seat limits from org
-    $limStmt = mysqli_prepare($con,
-        "SELECT max_editors, max_viewers FROM organizations WHERE id = ? LIMIT 1");
-    $maxEditors = $maxViewers = null;
-    if ($limStmt) {
-        mysqli_stmt_bind_param($limStmt, 'i', $me['org_id']);
-        mysqli_stmt_execute($limStmt);
-        mysqli_stmt_bind_result($limStmt, $maxEditors, $maxViewers);
-        mysqli_stmt_fetch($limStmt);
-        mysqli_stmt_close($limStmt);
-    }
-
-    $maxEditors = intval($maxEditors);
-    $maxViewers = intval($maxViewers);
-    if ($maxEditors <= 0) $maxEditors = 1;
-    if ($maxViewers <= 0) $maxViewers = 3;
-
+    $limStmt = $pdo->prepare('SELECT "max_editors", "max_viewers" FROM "organizations" WHERE "id" = :id LIMIT 1');
+    $limStmt->execute([':id' => $me['org_id']]);
+    $orgLimits = $limStmt->fetch(PDO::FETCH_ASSOC);
+    $maxEditors = isset($orgLimits['max_editors']) ? intval($orgLimits['max_editors']) : 1;
+    $maxViewers = isset($orgLimits['max_viewers']) ? intval($orgLimits['max_viewers']) : 3;
     respond(200, [
         'success' => true,
         'data'    => [
@@ -127,7 +97,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $me = get_authenticated_user($con);
+    $me = get_authenticated_user($pdo);
     if (!$me) respond(401, ['success' => false, 'message' => 'Unauthorized']);
     if ($me['org_role'] !== 'org_admin' && $me['org_role'] !== 'admin') {
         respond(403, ['success' => false, 'message' => 'Only admins can manage users']);
@@ -151,59 +121,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         if ($action === 'set_role') {
-            $targetStmt = mysqli_prepare($con,
-                "SELECT org_id, org_role FROM Login_user_AWS WHERE id = ? LIMIT 1");
-            if (!$targetStmt) {
-                respond(500, ['success' => false, 'message' => 'Failed to load target user', 'error' => mysqli_error($con)]);
-            }
-            mysqli_stmt_bind_param($targetStmt, 'i', $targetId);
-            mysqli_stmt_execute($targetStmt);
-            $targetOrgId = 0;
-            $targetRole = null;
-            mysqli_stmt_bind_result($targetStmt, $targetOrgId, $targetRole);
-            $targetFound = mysqli_stmt_fetch($targetStmt);
-            mysqli_stmt_close($targetStmt);
-
-            if (!$targetFound || intval($targetOrgId) !== intval($me['org_id'])) {
+            $sqlTarget = 'SELECT "org_id", "org_role" FROM "Login_user_AWS" WHERE "id" = :id LIMIT 1';
+            $stmtTarget = $pdo->prepare($sqlTarget);
+            $stmtTarget->execute([':id' => $targetId]);
+            $rowTarget = $stmtTarget->fetch(PDO::FETCH_ASSOC);
+            if (!$rowTarget || intval($rowTarget['org_id']) !== intval($me['org_id'])) {
                 respond(404, ['success' => false, 'message' => 'User not found in your organization']);
             }
-            if ($targetRole === 'org_admin' || $targetRole === 'admin') {
+            if ($rowTarget['org_role'] === 'org_admin' || $rowTarget['org_role'] === 'admin') {
                 respond(403, ['success' => false, 'message' => 'Cannot change role for organization admins']);
             }
-            if ($targetRole === $newRole) {
+            if ($rowTarget['org_role'] === $newRole) {
                 respond(200, ['success' => true, 'message' => 'Role is already up to date']);
             }
         }
 
         // Check seat availability
-        $countStmt = mysqli_prepare($con,
-            "SELECT org_role, COUNT(*) as cnt
-             FROM Login_user_AWS
-             WHERE org_id = ? AND org_role = ?
-             GROUP BY org_role");
-        if (!$countStmt) {
-            respond(500, ['success' => false, 'message' => 'Failed to count existing team members', 'error' => mysqli_error($con)]);
-        }
-        mysqli_stmt_bind_param($countStmt, 'is', $me['org_id'], $newRole);
-        mysqli_stmt_execute($countStmt);
-        $currentCount = 0;
-        mysqli_stmt_bind_result($countStmt, $roleIgnored, $currentCount);
-        mysqli_stmt_fetch($countStmt);
-        mysqli_stmt_close($countStmt);
-
-        $limStmt = mysqli_prepare($con,
-            "SELECT max_editors, max_viewers FROM organizations WHERE id = ? LIMIT 1");
-        $maxE = $maxV = null;
-        if ($limStmt) {
-            mysqli_stmt_bind_param($limStmt, 'i', $me['org_id']);
-            mysqli_stmt_execute($limStmt);
-            mysqli_stmt_bind_result($limStmt, $maxE, $maxV);
-            mysqli_stmt_fetch($limStmt);
-            mysqli_stmt_close($limStmt);
-        }
-
-        $maxE = intval($maxE);
-        $maxV = intval($maxV);
+        $sqlCount = 'SELECT COUNT(*) as cnt FROM "Login_user_AWS" WHERE "org_id" = :orgId AND "org_role" = :orgRole';
+        $stmtCount = $pdo->prepare($sqlCount);
+        $stmtCount->execute([':orgId' => $me['org_id'], ':orgRole' => $newRole]);
+        $rowCount = $stmtCount->fetch(PDO::FETCH_ASSOC);
+        $currentCount = $rowCount ? intval($rowCount['cnt']) : 0;
+        $sqlLim = 'SELECT "max_editors", "max_viewers" FROM "organizations" WHERE "id" = :id LIMIT 1';
+        $stmtLim = $pdo->prepare($sqlLim);
+        $stmtLim->execute([':id' => $me['org_id']]);
+        $rowLim = $stmtLim->fetch(PDO::FETCH_ASSOC);
+        $maxE = $rowLim ? intval($rowLim['max_editors']) : 1;
+        $maxV = $rowLim ? intval($rowLim['max_viewers']) : 3;
         if ($maxE <= 0) $maxE = 1;
         if ($maxV <= 0) $maxV = 3;
         $limit = ($newRole === 'editor') ? $maxE : $maxV;
@@ -213,19 +157,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         // Assign user to this org
-        $upStmt = mysqli_prepare($con,
-            "UPDATE Login_user_AWS
-             SET org_id = ?, org_role = ?, status = 'true', Permissions = ?
-             WHERE id = ? LIMIT 1");
-        if (!$upStmt) {
-            respond(500, ['success' => false, 'message' => 'Failed to update user role', 'error' => mysqli_error($con)]);
-        }
-        // Keep permission storage consistent as numeric levels.
         $perm = ($newRole === 'editor') ? '2' : '1';
-        mysqli_stmt_bind_param($upStmt, 'issi', $me['org_id'], $newRole, $perm, $targetId);
-        mysqli_stmt_execute($upStmt);
-        mysqli_stmt_close($upStmt);
-
+        $sqlUp = 'UPDATE "Login_user_AWS" SET org_id = :orgId, org_role = :orgRole, status = :status, permissions = :perm WHERE id = :id';
+        $stmtUp = $pdo->prepare($sqlUp);
+        $stmtUp->execute([
+            ':orgId' => $me['org_id'],
+            ':orgRole' => $newRole,
+            ':status' => 'true',
+            ':perm' => $perm,
+            ':id' => $targetId
+        ]);
         respond(200, ['success' => true, 'message' => "User assigned as $newRole"]);
     }
 
@@ -239,18 +180,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             respond(400, ['success' => false, 'message' => 'Cannot remove yourself']);
         }
 
-        $rmStmt = mysqli_prepare($con,
-            "UPDATE Login_user_AWS
-             SET org_id = NULL, org_role = 'viewer', status = 'false', Permissions = '1'
-             WHERE id = ? AND org_id = ? LIMIT 1");
-        if (!$rmStmt) {
-            respond(500, ['success' => false, 'message' => 'Failed to remove user', 'error' => mysqli_error($con)]);
-        }
-        mysqli_stmt_bind_param($rmStmt, 'ii', $targetId, $me['org_id']);
-        mysqli_stmt_execute($rmStmt);
-        $affected = mysqli_stmt_affected_rows($rmStmt);
-        mysqli_stmt_close($rmStmt);
-
+        $sqlRm = 'UPDATE "Login_user_AWS" SET org_id = NULL, org_role = :orgRole, status = :status, permissions = :perm WHERE id = :id AND org_id = :orgId';
+        $stmtRm = $pdo->prepare($sqlRm);
+        $stmtRm->execute([
+            ':orgRole' => 'viewer',
+            ':status' => 'false',
+            ':perm' => '1',
+            ':id' => $targetId,
+            ':orgId' => $me['org_id']
+        ]);
+        $affected = $stmtRm->rowCount();
         if ($affected === 0) {
             respond(404, ['success' => false, 'message' => 'User not found in your organization']);
         }

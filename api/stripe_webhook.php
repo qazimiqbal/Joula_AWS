@@ -11,9 +11,8 @@
 //   invoice.payment_failed
 // ---------------------------------------------------------------
 
-include('db.php');
+require_once 'db.pgsql.php';
 include('stripe_config.php');
-mysqli_select_db($con, $db);
 
 $payload   = file_get_contents('php://input');
 $sigHeader = isset($_SERVER['HTTP_STRIPE_SIGNATURE']) ? $_SERVER['HTTP_STRIPE_SIGNATURE'] : '';
@@ -54,20 +53,14 @@ $obj       = $event['data']['object'] ?? [];
 // ------------------------------------------------------------------
 // Helper: update org plan_status by stripe_customer_id
 // ------------------------------------------------------------------
-function update_org_status($con, $customerId, $status, $subId = null) {
+function update_org_status($pdo, $customerId, $status, $subId = null) {
     if ($subId) {
-        $stmt = mysqli_prepare($con,
-            "UPDATE organizations
-             SET plan_status = ?, stripe_subscription_id = ?
-             WHERE stripe_customer_id = ?");
-        mysqli_stmt_bind_param($stmt, 'sss', $status, $subId, $customerId);
+        $stmt = $pdo->prepare('UPDATE "organizations" SET "plan_status" = :status, "stripe_subscription_id" = :subId WHERE "stripe_customer_id" = :customerId');
+        $stmt->execute([':status' => $status, ':subId' => $subId, ':customerId' => $customerId]);
     } else {
-        $stmt = mysqli_prepare($con,
-            "UPDATE organizations SET plan_status = ? WHERE stripe_customer_id = ?");
-        mysqli_stmt_bind_param($stmt, 'ss', $status, $customerId);
+        $stmt = $pdo->prepare('UPDATE "organizations" SET "plan_status" = :status WHERE "stripe_customer_id" = :customerId');
+        $stmt->execute([':status' => $status, ':customerId' => $customerId]);
     }
-    mysqli_stmt_execute($stmt);
-    mysqli_stmt_close($stmt);
 }
 
 switch ($eventType) {
@@ -77,7 +70,7 @@ switch ($eventType) {
         $customerId = $obj['customer'] ?? null;
         $subId      = $obj['subscription'] ?? null;
         if ($customerId) {
-            update_org_status($con, $customerId, 'active', $subId);
+            update_org_status($pdo, $customerId, 'active', $subId);
         }
         break;
 
@@ -91,7 +84,7 @@ switch ($eventType) {
         if ($stripeStatus === 'canceled')   $mappedStatus = 'cancelled';
         if ($stripeStatus === 'unpaid')     $mappedStatus = 'past_due';
         if ($customerId) {
-            update_org_status($con, $customerId, $mappedStatus, $subId);
+            update_org_status($pdo, $customerId, $mappedStatus, $subId);
         }
         break;
 
@@ -99,7 +92,7 @@ switch ($eventType) {
     case 'customer.subscription.deleted':
         $customerId = $obj['customer'] ?? null;
         if ($customerId) {
-            update_org_status($con, $customerId, 'cancelled');
+            update_org_status($pdo, $customerId, 'cancelled');
         }
         break;
 
@@ -107,7 +100,7 @@ switch ($eventType) {
     case 'invoice.payment_failed':
         $customerId = $obj['customer'] ?? null;
         if ($customerId) {
-            update_org_status($con, $customerId, 'past_due');
+            update_org_status($pdo, $customerId, 'past_due');
         }
         break;
 }

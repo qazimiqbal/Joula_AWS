@@ -104,8 +104,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const login = async (email: string, password: string) => {
     setLoading(true)
     try {
+      console.log('[AuthContext] Calling apiService.login with', email)
       const response = await apiService.login({ email, password })
-      
+      console.log('[AuthContext] apiService.login response:', response)
       setUser(response.user)
       localStorage.setItem('authToken', response.token)
       localStorage.setItem('user', JSON.stringify(response.user))
@@ -117,7 +118,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       } else {
         localStorage.removeItem('subscription')
       }
+      console.log('[AuthContext] Login state updated, user:', response.user)
     } catch (error) {
+      console.error('[AuthContext] Login error:', error)
       if (axios.isAxiosError(error)) {
         const responseData = error.response?.data as { message?: string } | undefined
         if (responseData?.message) {
@@ -130,6 +133,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       throw error
     } finally {
       setLoading(false)
+      console.log('[AuthContext] Login finished, loading:', loading)
     }
   }
 

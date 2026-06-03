@@ -19,6 +19,7 @@ import {
   TableRow,
   Typography,
 } from '@mui/material'
+import { useJsApiLoader } from '@react-google-maps/api'
 import { useAuth } from '@/context/AuthContext'
 import apiService from '@services/api'
 import { PendingGeocodeRecord, PendingMasjidRecord } from '@/types'
@@ -28,8 +29,13 @@ type ReviewRow = PendingGeocodeRecord | PendingMasjidRecord
 
 const GeocodeReview: React.FC = () => {
   const navigate = useNavigate()
+  const googleMapsApiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || ''
+  const { isLoaded: isGoogleMapsLoaded } = useJsApiLoader({
+    id: 'geocode-review-google-geocoder',
+    googleMapsApiKey,
+  })
   const { user } = useAuth()
-  const [mode, setMode] = useState<ReviewMode>('masjids')
+  const [mode, setMode] = useState<ReviewMode>('addresses')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
@@ -41,7 +47,14 @@ const GeocodeReview: React.FC = () => {
   const [page, setPage] = useState(0)
   const [rowsPerPage, setRowsPerPage] = useState(10)
 
-  const permissionLevel = user?.permissionLevel ?? 0
+  const roleBasedLevel = user?.orgRole === 'org_admin' || user?.orgRole === 'admin'
+    ? 3
+    : user?.orgRole === 'editor'
+      ? 2
+      : user?.orgRole === 'viewer'
+        ? 1
+        : 0
+  const permissionLevel = Math.max(user?.permissionLevel ?? 0, roleBasedLevel, user?.role === 'admin' ? 3 : 1)
 
   const rows = mode === 'addresses' ? addressRows : masjidRows
 
@@ -82,6 +95,24 @@ const GeocodeReview: React.FC = () => {
     loadRows(mode, createdByFilter)
   }, [mode, createdByFilter])
 
+  const geocodeWithBrowserGoogle = async (query: string): Promise<{ lat: number; lng: number } | null> => {
+    if (!isGoogleMapsLoaded || typeof window === 'undefined' || !window.google?.maps?.Geocoder) {
+      return null
+    }
+
+    const geocoder = new window.google.maps.Geocoder()
+    return new Promise((resolve) => {
+      geocoder.geocode({ address: query }, (results, status) => {
+        if (status === 'OK' && results?.[0]?.geometry?.location) {
+          const loc = results[0].geometry.location
+          resolve({ lat: loc.lat(), lng: loc.lng() })
+          return
+        }
+        resolve(null)
+      })
+    })
+  }
+
   const openOnMap = async (row: ReviewRow) => {
     setOpeningId(row.id)
     setError('')
@@ -93,8 +124,17 @@ const GeocodeReview: React.FC = () => {
         return
       }
 
+      if (!googleMapsApiKey || !isGoogleMapsLoaded) {
+        setError('Google geocoder is still loading. Please try again.')
+        return
+      }
+
       const query = [row.aptNo, row.houseNo, row.streetName, row.city, row.state, row.zip].filter(Boolean).join(', ')
-      const geocoded = await apiService.geocodeAddress(query)
+      const geocoded = await geocodeWithBrowserGoogle(query)
+      if (!geocoded) {
+        setError('Could not geocode this row with Google.')
+        return
+      }
       navigate(`/map?reviewLat=${geocoded.lat}&reviewLng=${geocoded.lng}&reviewId=${row.id}&reviewName=${encodeURIComponent(row.name)}&reviewType=${reviewType}`)
     } catch {
       setError('Could not open this row on map. Coordinate lookup failed.')
@@ -177,6 +217,11 @@ const GeocodeReview: React.FC = () => {
 
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
       {success && <Alert severity="success" sx={{ mb: 2 }}>{success}</Alert>}
+      {!isGoogleMapsLoaded && (
+        <Alert severity="info" sx={{ mb: 2 }}>
+          Loading Google geocoder...
+        </Alert>
+      )}
 
       <Paper elevation={1} sx={{ p: 2 }}>
         {loading ? (
