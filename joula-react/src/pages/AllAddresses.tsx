@@ -23,7 +23,7 @@ const AllAddresses: React.FC = () => {
         let params: any = {};
         if (user && (user.orgRole === 'org_admin' || user.orgRole === 'admin')) {
           params.mine = true;
-        } else if (user && user.permissionLevel >= 4) {
+        } else if (user && (user.permissionLevel ?? 0) >= 4) {
           params.listAll = true;
         } else {
           params.mine = true;

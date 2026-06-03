@@ -162,8 +162,6 @@ const MapView: React.FC = () => {
     const masjidIdParam = searchParams.get('masjidId')
     const mineParam = searchParams.get('mine') === '1'
     const masjidFilterParam = searchParams.get('masjidFilter')
-    const showMasjidsParam = searchParams.get('showMasjids') === '1'
-
     if (allAddressesParam === '1' || masjidIdParam) {
       setLoading(true)
       setError('')

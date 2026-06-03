@@ -6,7 +6,7 @@ import { Masjid, PendingGeocodeRecord, PendingMasjidRecord } from '@/types';
 import { useAuth } from '@/context/AuthContext';
 
 const Dashboard: React.FC = () => {
-  const { user, subscription } = useAuth();
+  const { user } = useAuth();
   const navigate = useNavigate();
   const roleBasedLevel = user?.orgRole === 'org_admin' || user?.orgRole === 'admin'
     ? 3
@@ -19,12 +19,6 @@ const Dashboard: React.FC = () => {
   const isSuperAdmin = permissionLevel >= 4;
   const isChildEditor = permissionLevel === 2;
   const isViewer = permissionLevel <= 1;
-  const hasActiveSubscription = isSuperAdmin || user?.isFreeUser || (
-    !!subscription &&
-    subscription.planStatus !== 'expired' &&
-    subscription.planStatus !== 'cancelled' &&
-    subscription.planStatus !== 'past_due'
-  );
   const canManageOwnData = permissionLevel >= 2;
   const [pendingMasjids, setPendingMasjids] = useState<PendingMasjidRecord[]>([]);
   const [pendingAddresses, setPendingAddresses] = useState<PendingGeocodeRecord[]>([]);
