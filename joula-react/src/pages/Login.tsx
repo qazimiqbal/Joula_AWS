@@ -77,16 +77,16 @@ const Login: React.FC = () => {
   const navigate = useNavigate()
 
   const authMode = useMemo<'local' | 'hybrid' | 'google' | 'auto'>(() => {
-    const raw = String(import.meta.env.VITE_AUTH_MODE ?? 'local').trim().toLowerCase()
+    const raw = String(import.meta.env.VITE_AUTH_MODE ?? 'auto').trim().toLowerCase()
     if (raw === 'google' || raw === 'hybrid' || raw === 'local' || raw === 'auto') {
       return raw
     }
-    return 'local'
+    return 'auto'
   }, [])
 
   const allowPassword = authMode !== 'google'
   const hasGoogleClientId = !!(import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined)
-  const allowGoogle = authMode !== 'local' && hasGoogleClientId
+  const allowGoogle = (authMode === 'google' || authMode === 'hybrid' || authMode === 'auto') && hasGoogleClientId
 
   useEffect(() => {
     if (!allowPassword && mode === 'register') {
