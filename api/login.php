@@ -127,6 +127,18 @@ function has_column($con, $dbName, $tableName, $columnName) {
     return $stmt->fetchColumn() ? true : false;
 }
 
+function resolve_column_name($con, $tableName, $columnName) {
+    $sql = "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND LOWER(table_name) = LOWER(:tableName) AND LOWER(column_name) = LOWER(:columnName) ORDER BY CASE WHEN column_name = :preferred THEN 0 ELSE 1 END LIMIT 1";
+    $stmt = $con->prepare($sql);
+    $stmt->execute([
+        ':tableName' => $tableName,
+        ':columnName' => $columnName,
+        ':preferred' => $columnName,
+    ]);
+    $resolved = $stmt->fetchColumn();
+    return $resolved ? $resolved : $columnName;
+}
+
 $loginTable = find_login_table_name($con, $db);
 if (!$loginTable) {
     respond(500, array(
@@ -143,24 +155,38 @@ $hasPermissions = has_column($con, $db, $loginTable, 'permissions');
 $hasFreeUser = has_column($con, $db, $loginTable, 'is_free_user');
 $hasGoogleOnly = has_column($con, $db, $loginTable, 'google_only');
 
-$phoneExpr = $hasPhone ? 'phone' : "'' AS phone";
-$permissionsExpr = $hasPermissions ? 'permissions' : "'' AS permissions";
-$orgIdExpr = $hasOrgId ? 'org_id' : '0 AS org_id';
-$orgRoleExpr = $hasOrgRole ? "org_role" : "'viewer' AS org_role";
-$freeUserExpr = $hasFreeUser ? 'is_free_user' : '0 AS is_free_user';
-$googleOnlyExpr = $hasGoogleOnly ? 'google_only' : '0 AS google_only';
+$idColumn = resolve_column_name($con, $loginTable, 'id');
+$usernameColumn = resolve_column_name($con, $loginTable, 'username');
+$emailColumn = resolve_column_name($con, $loginTable, 'email');
+$passwordColumn = resolve_column_name($con, $loginTable, 'password');
+$statusColumn = resolve_column_name($con, $loginTable, 'status');
+$phoneColumn = $hasPhone ? resolve_column_name($con, $loginTable, 'phone') : null;
+$permissionsColumn = $hasPermissions ? resolve_column_name($con, $loginTable, 'permissions') : null;
+$orgIdColumn = $hasOrgId ? resolve_column_name($con, $loginTable, 'org_id') : null;
+$orgRoleColumn = $hasOrgRole ? resolve_column_name($con, $loginTable, 'org_role') : null;
+$freeUserColumn = $hasFreeUser ? resolve_column_name($con, $loginTable, 'is_free_user') : null;
+$googleOnlyColumn = $hasGoogleOnly ? resolve_column_name($con, $loginTable, 'google_only') : null;
+$authTokenColumn = has_column($con, $db, $loginTable, 'auth_token') ? resolve_column_name($con, $loginTable, 'auth_token') : null;
 
-$whereStatus = $hasStatus ? "status = 'true' AND " : "";
+$phoneExpr = $phoneColumn ? '"' . $phoneColumn . '" AS phone' : "'' AS phone";
+$permissionsExpr = $permissionsColumn ? '"' . $permissionsColumn . '" AS permissions' : "'' AS permissions";
+$orgIdExpr = $orgIdColumn ? '"' . $orgIdColumn . '" AS org_id' : '0 AS org_id';
+$orgRoleExpr = $orgRoleColumn ? '"' . $orgRoleColumn . '" AS org_role' : "'viewer' AS org_role";
+$freeUserExpr = $freeUserColumn ? '"' . $freeUserColumn . '" AS is_free_user' : '0 AS is_free_user';
+$googleOnlyExpr = $googleOnlyColumn ? '"' . $googleOnlyColumn . '" AS google_only' : '0 AS google_only';
+
+$whereStatus = $hasStatus ? '"' . $statusColumn . '" = :statusValue AND ' : '';
 
 // Schema-adaptive login query for Joula_AWS (works with and without subscription columns).
 
-$sql = "SELECT id, username, email, $phoneExpr, $permissionsExpr, $orgIdExpr, $orgRoleExpr, $freeUserExpr, $googleOnlyExpr FROM \"$loginTable\" WHERE $whereStatus (username = :identifier OR username = :usernameCandidate OR email = :identifier2) AND password = :password LIMIT 1";
+$sql = "SELECT \"$idColumn\" AS id, \"$usernameColumn\" AS username, \"$emailColumn\" AS email, $phoneExpr, $permissionsExpr, $orgIdExpr, $orgRoleExpr, $freeUserExpr, $googleOnlyExpr FROM \"$loginTable\" WHERE $whereStatus (\"$usernameColumn\" = :identifier OR \"$usernameColumn\" = :usernameCandidate OR \"$emailColumn\" = :identifier2) AND \"$passwordColumn\" = :password LIMIT 1";
 $stmt = $con->prepare($sql);
 $userRow = null;
 $stmt->execute([
     ':identifier' => $identifier,
     ':usernameCandidate' => $usernameCandidate,
     ':identifier2' => $identifier,
+    ':statusValue' => 'true',
     ':password' => md5($password)
 ]);
 $row = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -172,12 +198,13 @@ if ($row) {
 if (!$userRow) {
     file_put_contents(__DIR__ . '/login_debug.log', date('c') . " | login failed for: $identifier\n", FILE_APPEND);
     if ($hasGoogleOnly) {
-        $googleOnlyCheckSql = "SELECT google_only FROM \"$loginTable\" WHERE $whereStatus (username = :identifier OR username = :usernameCandidate OR email = :identifier2) LIMIT 1";
+        $googleOnlyCheckSql = "SELECT \"$googleOnlyColumn\" AS google_only FROM \"$loginTable\" WHERE $whereStatus (\"$usernameColumn\" = :identifier OR \"$usernameColumn\" = :usernameCandidate OR \"$emailColumn\" = :identifier2) LIMIT 1";
         $googleOnlyStmt = $con->prepare($googleOnlyCheckSql);
         $googleOnlyStmt->execute([
             ':identifier' => $identifier,
             ':usernameCandidate' => $usernameCandidate,
-            ':identifier2' => $identifier
+            ':identifier2' => $identifier,
+            ':statusValue' => 'true'
         ]);
         $googleOnly = $googleOnlyStmt->fetchColumn();
         if ($googleOnly && intval($googleOnly) === 1) {
@@ -197,8 +224,11 @@ if (function_exists('random_bytes')) {
 }
 
 // Persist token in DB for stateless API auth
-$stmtToken = $con->prepare("UPDATE \"$loginTable\" SET auth_token = :token WHERE id = :id");
-$stmtToken->execute([':token' => $token, ':id' => $userRow['id']]);
+$tokenUpdateSql = $authTokenColumn ? "UPDATE \"$loginTable\" SET \"$authTokenColumn\" = :token WHERE \"$idColumn\" = :id" : null;
+if ($tokenUpdateSql) {
+    $stmtToken = $con->prepare($tokenUpdateSql);
+    $stmtToken->execute([':token' => $token, ':id' => $userRow['id']]);
+}
 
 // Load subscription / org info
 $subscription = null;
