@@ -84,15 +84,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     }
 
     // Auto-expire trial if date has passed and still marked as trial
-    $now = new DateTime('now', new DateTimeZone('UTC'));
-    $trialEnd = new DateTime($row['trial_ends_at'], new DateTimeZone('UTC'));
-    if ($row['plan_status'] === 'trial' && $now > $trialEnd) {
-        $expireStmt = $con->prepare("UPDATE organizations SET plan_status = 'expired' WHERE id = :orgId");
-        $expireStmt->execute([':orgId' => $row['org_id']]);
-        $row['plan_status'] = 'expired';
-    }
+    $trialDaysLeft = 0;
+    $trialEndsAtRaw = trim((string)$row['trial_ends_at']);
+    if ($trialEndsAtRaw !== '') {
+        try {
+            $now = new DateTime('now', new DateTimeZone('UTC'));
+            $trialEnd = new DateTime($trialEndsAtRaw, new DateTimeZone('UTC'));
+            if ($row['plan_status'] === 'trial' && $now > $trialEnd) {
+                $expireStmt = $con->prepare("UPDATE organizations SET plan_status = 'expired' WHERE id = :orgId");
+                $expireStmt->execute([':orgId' => $row['org_id']]);
+                $row['plan_status'] = 'expired';
+            }
 
-    $trialDaysLeft = max(0, (int)ceil(($trialEnd->getTimestamp() - $now->getTimestamp()) / 86400));
+            $trialDaysLeft = max(0, (int)ceil(($trialEnd->getTimestamp() - $now->getTimestamp()) / 86400));
+        } catch (Exception $e) {
+            file_put_contents(__DIR__ . '/php-error.log', date('c') . " invalid trial_ends_at for org " . $row['org_id'] . ": " . $e->getMessage() . "\n", FILE_APPEND);
+        }
+    }
 
     respond(200, [
         'success' => true,

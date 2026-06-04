@@ -215,15 +215,23 @@ if ($orgId > 0) {
             $planStatus = 'active';
             $trialDaysLeft = 0;
         } else {
-            // Auto-expire trial
-            $now = new DateTime('now', new DateTimeZone('UTC'));
-            $trialEnd = new DateTime($trialEndsAt, new DateTimeZone('UTC'));
-            if ($planStatus === 'trial' && $now > $trialEnd) {
-                $planStatus = 'expired';
-                $expStmt = $con->prepare("UPDATE organizations SET plan_status='expired' WHERE id=:orgId");
-                $expStmt->execute([':orgId' => $orgId]);
+            $trialDaysLeft = 0;
+            $trialEndsAtRaw = trim((string)$trialEndsAt);
+            if ($trialEndsAtRaw !== '') {
+                try {
+                    // Auto-expire trial only when a valid trial end date exists.
+                    $now = new DateTime('now', new DateTimeZone('UTC'));
+                    $trialEnd = new DateTime($trialEndsAtRaw, new DateTimeZone('UTC'));
+                    if ($planStatus === 'trial' && $now > $trialEnd) {
+                        $planStatus = 'expired';
+                        $expStmt = $con->prepare("UPDATE organizations SET plan_status='expired' WHERE id=:orgId");
+                        $expStmt->execute([':orgId' => $orgId]);
+                    }
+                    $trialDaysLeft = max(0, (int)ceil(($trialEnd->getTimestamp() - $now->getTimestamp()) / 86400));
+                } catch (Exception $e) {
+                    file_put_contents(__DIR__ . '/login_debug.log', date('c') . " | [DEBUG] Invalid trial_ends_at for org $orgId: " . $e->getMessage() . "\n", FILE_APPEND);
+                }
             }
-            $trialDaysLeft = max(0, (int)ceil(($trialEnd->getTimestamp() - $now->getTimestamp()) / 86400));
         }
         $subscription = [
             'orgId'        => $orgId,
